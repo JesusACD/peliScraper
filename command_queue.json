@@ -1,0 +1,30 @@
+[
+  {
+    "command": "python main.py process \"https://www.mediafire.com/file/fbmdidndqotnqio/UnamxXOYjH9rQtLm1Vg.rar/file\" -i 848987 -t \"Una nota para el Amor\" -y 2023 -Q 1080p -l Latino -p \"cc\" --upload desu --upload okru --upload netu --upload seekstreaming --upload buzzheavier --upload googledrive --upload mediafire --upload mega --upload ranoz --upload pixeldrain; rm -rf downloads/*;",
+    "language": "Latino/Inglés",
+    "quality": "Dual 1080p",
+    "server": "voe",
+    "url": "https://www.mediafire.com/file/fbmdidndqotnqio/UnamxXOYjH9rQtLm1Vg.rar/file"
+  },
+  {
+    "command": "python main.py process \"https://www.mediafire.com/file/cnapmb8ct94u4ct/2X24m1-2.rar/file\" -i 1317288 -t \"Marty Supremo\" -y 2025 -Q 1080p -l Latino -p \"cc\" --upload desu --upload okru --upload netu --upload seekstreaming --upload buzzheavier --upload googledrive --upload mediafire --upload mega --upload ranoz --upload pixeldrain; rm -rf downloads/*;",
+    "language": "Latino/Inglés",
+    "quality": "Dual 1080p",
+    "server": "Mediafire",
+    "url": "https://www.mediafire.com/file/cnapmb8ct94u4ct/2X24m1-2.rar/file"
+  },
+  {
+    "command": "python main.py process \"https://www.mediafire.com/file/qquy8o2kc4ph64j/NLTALO1973.rar/file\" -i 26015 -t \"No le temas a la oscuridad\" -y 1973 -Q 1080p -l Latino -p \"cc\" --upload desu --upload okru --upload netu --upload seekstreaming --upload buzzheavier --upload googledrive --upload mediafire --upload mega --upload ranoz --upload pixeldrain; rm -rf downloads/*;",
+    "language": "Latino/Inglés",
+    "quality": "Dual 1080p",
+    "server": "voe",
+    "url": "https://www.mediafire.com/file/qquy8o2kc4ph64j/NLTALO1973.rar/file"
+  },
+  {
+    "command": "python main.py process \"https://www.mediafire.com/file/iypd0abvrh3glfc/KraH335nXPZKaAED35l.rar/file\" -i 607338 -t \"Krazy House\" -y 2024 -Q 1080p -l Latino -p \"cc\" --upload desu --upload okru --upload netu --upload seekstreaming --upload buzzheavier --upload googledrive --upload mediafire --upload mega --upload ranoz --upload pixeldrain; rm -rf downloads/*;",
+    "language": "Latino/Inglés",
+    "quality": "Dual 1080p",
+    "server": "voe",
+    "url": "https://www.mediafire.com/file/iypd0abvrh3glfc/KraH335nXPZKaAED35l.rar/file"
+  }
+]

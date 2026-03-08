@@ -3,6 +3,7 @@
 import json
 import csv
 import io
+import os
 import threading
 from flask import Blueprint, request, jsonify, Response
 from datetime import datetime
@@ -436,7 +437,7 @@ def generate_command(content_id):
             cmd_parts.append(f'--upload {server}')
 
         commands.append({
-            'command': ' '.join(cmd_parts),
+            'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
             'server': dl.server,
             'quality': dl.quality,
             'language': dl.language,
@@ -450,6 +451,200 @@ def generate_command(content_id):
         'title': clean_title,
         'tmdb_id': tmdb_id,
     })
+
+
+@api.route('/api/content/bulk-generate', methods=['POST'])
+def bulk_generate_commands():
+    """Genera comandos CLI para múltiples contenidos a la vez."""
+    import requests as req
+    import random
+    import re
+
+    data = request.get_json() or {}
+    content_ids = data.get('content_ids', [])
+    upload_servers = data.get('upload_servers', [])
+    password = data.get('password', '')
+    auto_resolve_tmdb = data.get('auto_resolve_tmdb', True)
+
+    if not content_ids:
+        return jsonify({'error': True, 'message': 'No se seleccionaron contenidos'}), 400
+
+    # Pool de API keys
+    TMDB_API_KEYS = [
+        '10923b261ba94d897ac6b81148314a3f',
+        'b573d051ec65413c949e68169923f7ff',
+        'da40aaeca884d8c9a9a4c088917c474c',
+        '4e44d9029b1270a757cddc766a1bcb63',
+        '39151834c95219c3cae772b4465079d7',
+        '6bca0b74270a3299673d934c1bb11b4d',
+        '902ddd650dd51f569c2ef95468612ad1',
+        '4c7ff8e6151131469216f007e4be3b3d',
+        '21e3f055fa996f78a2886737bb6e7957',
+        '98325a9d3ed3ec225e41ccc4d360c817',
+        '3fd2be6f0c70a2a598f084ddfb75487c',
+    ]
+
+    all_results = []
+    errors = []
+    import time
+
+    for cid in content_ids:
+        content = Content.query.get(cid)
+        if not content:
+            errors.append(f'ID {cid} no encontrado')
+            continue
+
+        tmdb_id = content.tmdb_id
+
+        # Auto-resolver TMDB ID si no tiene
+        if not tmdb_id and auto_resolve_tmdb:
+            clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
+            search_type = 'movie' if content.content_type in ('movies',) else 'tv'
+            year = content.year or ''
+
+            api_key = random.choice(TMDB_API_KEYS)
+            params = {
+                'api_key': api_key,
+                'query': clean_title,
+                'language': 'es-MX',
+            }
+            if year:
+                params['year' if search_type == 'movie' else 'first_air_date_year'] = year
+
+            try:
+                resp = req.get(
+                    f'https://api.themoviedb.org/3/search/{search_type}',
+                    params=params, timeout=10
+                )
+                if resp.status_code == 200:
+                    results = resp.json().get('results', [])
+                    if results:
+                        tmdb_id = results[0]['id']
+                        content.tmdb_id = tmdb_id
+                        db.session.commit()
+                time.sleep(0.3)  # Rate limiting para TMDB
+            except Exception:
+                pass
+
+        if not tmdb_id:
+            errors.append(f'"{content.title}" - No se pudo obtener TMDB ID')
+            continue
+
+        # Obtener año y título limpio
+        year = content.year or ''
+        if not year and content.release_date:
+            year = content.release_date[:4]
+        clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
+
+        # Generar comandos para cada descarga
+        downloads = DownloadLink.query.filter_by(content_id=content.id).all()
+
+        if not downloads:
+            errors.append(f'"{content.title}" - Sin enlaces de descarga')
+            continue
+
+        for dl in downloads:
+            quality = dl.quality or ''
+            quality_clean = quality.replace('Dual ', '').replace('Full HD', '1080p').replace('HD', '720p')
+            if not quality_clean:
+                quality_clean = '1080p'
+
+            lang = dl.language or ''
+            lang_parts = [l.strip() for l in lang.split('/')]
+            lang_clean = lang_parts[0] if lang_parts else 'Latino'
+
+            cmd_parts = ['python main.py process']
+            cmd_parts.append(f'"{dl.url}"')
+            cmd_parts.append(f'-i {tmdb_id}')
+            cmd_parts.append(f'-t "{clean_title}"')
+            if year:
+                cmd_parts.append(f'-y {year}')
+            cmd_parts.append(f'-Q {quality_clean}')
+            cmd_parts.append(f'-l {lang_clean}')
+
+            if password:
+                cmd_parts.append(f'-p "{password}"')
+
+            for server in upload_servers:
+                cmd_parts.append(f'--upload {server}')
+
+            all_results.append({
+                'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
+                'title': clean_title,
+                'tmdb_id': tmdb_id,
+                'quality': dl.quality,
+                'language': dl.language,
+                'server': extractServerNamePy(dl.url),
+            })
+
+    return jsonify({
+        'error': False,
+        'commands': all_results,
+        'total': len(all_results),
+        'errors': errors,
+        'processed': len(content_ids) - len(errors),
+    })
+
+
+def extractServerNamePy(url):
+    """Extrae nombre del servidor de una URL."""
+    try:
+        from urllib.parse import urlparse
+        return urlparse(url).hostname.replace('www.', '')
+    except Exception:
+        return 'unknown'
+
+
+# ─── COLA DE COMANDOS (SERVIDOR) ─────────────────────────
+
+import json
+
+QUEUE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'command_queue.json')
+
+
+def _load_queue():
+    """Carga la cola de comandos del archivo JSON."""
+    try:
+        with open(QUEUE_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save_queue(queue):
+    """Guarda la cola de comandos en el archivo JSON."""
+    with open(QUEUE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(queue, f, ensure_ascii=False, indent=2)
+
+
+@api.route('/api/queue')
+def get_queue():
+    """Obtiene todos los comandos en la cola."""
+    queue = _load_queue()
+    return jsonify({'error': False, 'commands': queue, 'total': len(queue)})
+
+
+@api.route('/api/queue/add', methods=['POST'])
+def add_to_queue():
+    """Agrega uno o varios comandos a la cola."""
+    data = request.get_json() or {}
+    commands = data.get('commands', [])
+
+    if not commands:
+        return jsonify({'error': True, 'message': 'No se enviaron comandos'}), 400
+
+    queue = _load_queue()
+    queue.extend(commands)
+    _save_queue(queue)
+
+    return jsonify({'error': False, 'message': f'{len(commands)} comando(s) agregado(s)', 'total': len(queue)})
+
+
+@api.route('/api/queue/clear', methods=['POST'])
+def clear_queue():
+    """Limpia toda la cola de comandos."""
+    _save_queue([])
+    return jsonify({'error': False, 'message': 'Cola limpiada'})
 
 
 # ─── UTILIDADES ──────────────────────────────────────────────

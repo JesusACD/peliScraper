@@ -341,6 +341,7 @@
               <option value="rating">Rating ↓</option>
               <option value="year">Año ↓</option>
             </select>
+            <button class="btn btn-outline btn-sm" onclick="enterSelectionMode()" title="Seleccionar para generar comandos masivos">☑ Seleccionar</button>
           </div>
           <div class="content-grid" id="gridMovies"></div>
           <div class="loader" id="loaderMovies">
@@ -394,6 +395,7 @@
               <option value="rating">Rating ↓</option>
               <option value="year">Año ↓</option>
             </select>
+            <button class="btn btn-outline btn-sm" onclick="enterSelectionMode()" title="Seleccionar para generar comandos masivos">☑ Seleccionar</button>
           </div>
           <div class="content-grid" id="gridSeries"></div>
           <div class="loader" id="loaderSeries">
@@ -447,6 +449,7 @@
               <option value="rating">Rating ↓</option>
               <option value="year">Año ↓</option>
             </select>
+            <button class="btn btn-outline btn-sm" onclick="enterSelectionMode()" title="Seleccionar para generar comandos masivos">☑ Seleccionar</button>
           </div>
           <div class="content-grid" id="gridAnimes"></div>
           <div class="loader" id="loaderAnimes">
@@ -469,8 +472,36 @@
         </div>
       </div>
 
-      <!-- Toast Container -->
-      <div class="toast-container" id="toastContainer"></div>
+      <!-- Bulk Action Toolbar -->
+    <div class="bulk-toolbar" id="bulkToolbar">
+        <span class="bulk-count" id="bulkCount">0 seleccionados</span>
+        <div class="bulk-actions">
+            <input type="text" id="bulkPassword" value="cc" placeholder="Contraseña" title="Contraseña del archivo">
+            <button class="btn btn-primary btn-sm" onclick="bulkGenerate()">🚀 Generar Comandos Masivos</button>
+            <button class="btn btn-outline btn-sm" onclick="selectAllVisible()">Seleccionar todo</button>
+            <button class="btn btn-outline btn-sm" onclick="exitSelectionMode()">✕ Cancelar</button>
+        </div>
+    </div>
+
+    <!-- Bulk Results Overlay -->
+    <div class="bulk-results-overlay" id="bulkResultsOverlay" onclick="if(event.target===this)closeBulkResults()">
+        <div class="bulk-results-panel">
+            <h3>
+                <span>🚀 Comandos Generados</span>
+                <button class="close-bulk" onclick="closeBulkResults()">✕</button>
+            </h3>
+            <div id="bulkResultsContent"></div>
+        </div>
+    </div>
+
+    <!-- Floating Queue Button -->
+    <div style="position:fixed;bottom:20px;right:24px;z-index:99;display:none;cursor:pointer" onclick="openQueuePanel()" title="Cola de comandos">
+        <div style="background:var(--accent);color:white;border-radius:50%;width:52px;height:52px;display:flex;align-items:center;justify-content:center;font-size:22px;box-shadow:0 4px 16px rgba(99,102,241,0.4)">📦</div>
+        <span id="queueBadge" style="position:absolute;top:-4px;right:-4px;background:var(--danger);color:white;border-radius:50%;width:22px;height:22px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center">0</span>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
     </div>
 
     <script src="/static/app.js"></script>

@@ -12,6 +12,9 @@ const state = {
     pollingInterval: null,
     genres: [],
     years: [],
+    selectedItems: new Set(),
+    selectionMode: false,
+    commandQueue: [],
 };
 
 // Mapeo de tipos de contenido a nombres de sección
@@ -59,6 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadStats();
     loadJobHistory();
     loadFilters();
+    loadQueueCount();
     startPolling();
 });
 
@@ -212,8 +216,11 @@ function renderCard(item) {
     const genres = (item.genres || []).slice(0, 2);
     const languages = (item.languages || []);
 
+    const isSelected = state.selectedItems.has(item.id);
+
     return `
-        <div class="content-card" onclick="openDetail(${item.id})">
+        <div class="content-card ${isSelected ? 'selected' : ''}" onclick="handleCardClick(event, ${item.id})" data-id="${item.id}">
+            <div class="card-checkbox" onclick="event.stopPropagation(); toggleSelection(${item.id})">${isSelected ? '✓' : ''}</div>
             <span class="card-type-badge ${item.content_type}">${typeLabel.icon || ''} ${typeLabel.label || item.content_type}</span>
             ${item.downloads_scraped ? '<span class="card-download-badge" title="Descargas disponibles">📥</span>' : ''}
             ${posterHtml}
@@ -405,7 +412,7 @@ async function openDetail(contentId) {
                 <div class="cmd-config">
                     <div class="field">
                         <label>Contraseña (archivo)</label>
-                        <input type="text" id="cmdPassword" placeholder="ej: cc" style="min-width:100px">
+                        <input type="text" id="cmdPassword" value="cc" placeholder="ej: cc" style="min-width:100px">
                     </div>
                 </div>
 
@@ -413,7 +420,7 @@ async function openDetail(contentId) {
                     <label style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Servidores de upload</label>
                     <div class="upload-servers-grid" id="uploadServers">
                         ${UPLOAD_SERVERS.map(s => `
-                            <span class="upload-server-tag" data-server="${s}" onclick="toggleUploadServer(this)">${s}</span>
+                            <span class="upload-server-tag active" data-server="${s}" onclick="toggleUploadServer(this)">${s}</span>
                         `).join('')}
                     </div>
                     <div style="margin-top:6px">
@@ -587,19 +594,24 @@ async function generateCommands(contentId) {
     // Renderizar comandos
     let html = `<p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">📋 ${result.total} comando(s) generado(s) para <strong>${escapeHtml(result.title)}</strong> (TMDB: ${result.tmdb_id})</p>`;
 
+    // Botón agregar todos a la cola
+    html += `<button class="btn btn-outline btn-sm" style="margin-bottom:10px" onclick="addAllToQueue(${JSON.stringify(result.commands).replace(/"/g, '&quot;')})">📦 Agregar todos a la cola</button>`;
+
     // Botón copiar todos
-    const allCmds = result.commands.map(c => c.command).join('\n');
+    const allCmds = result.commands.map(c => c.command).join(' ');
     html += `<button class="btn btn-outline btn-sm" style="margin-bottom:10px" onclick="copyToClipboard(\`${allCmds.replace(/`/g, '\\`')}\`)">📋 Copiar todos los comandos</button>`;
 
     result.commands.forEach((cmd, i) => {
+        const isMf = (cmd.url || '').includes('mediafire');
         html += `
-            <div class="cmd-block">
+            <div class="cmd-block" ${isMf ? 'style="border-left:3px solid #4ade80"' : ''}>
                 <div class="cmd-label">
                     <span class="quality-badge">${escapeHtml(cmd.quality || 'N/A')}</span>
                     ${escapeHtml(cmd.language || '')} · ${extractServerName(cmd.url)}
                 </div>
                 <pre>${escapeHtml(cmd.command)}</pre>
-                <button class="copy-btn" onclick="copyToClipboard(this.previousElementSibling.textContent)">📋</button>
+                <button class="copy-btn" style="right:50px" onclick="copyToClipboard(this.previousElementSibling.textContent)">📋</button>
+                <button class="copy-btn" onclick="addOneToQueue(${JSON.stringify(cmd).replace(/"/g, '&quot;')})">➕</button>
             </div>
         `;
     });
@@ -667,7 +679,8 @@ async function scrapeContentDownloads(contentId) {
 // ─── POLLING DE PROGRESO ────────────────────────────────
 function startPolling() {
     if (state.pollingInterval) clearInterval(state.pollingInterval);
-    state.pollingInterval = setInterval(checkScrapeStatus, 2000);
+    // Polling lento por defecto (cada 10s), se acelera cuando hay scraping activo
+    state.pollingInterval = setInterval(checkScrapeStatus, 10000);
     checkScrapeStatus();
 }
 
@@ -692,15 +705,26 @@ async function checkScrapeStatus() {
         document.getElementById('progressItems').textContent = job.items_scraped.toLocaleString();
         document.getElementById('progressErrors').textContent = job.errors;
 
+        // Polling rápido durante scraping activo
+        if (!state.fastPolling) {
+            state.fastPolling = true;
+            clearInterval(state.pollingInterval);
+            state.pollingInterval = setInterval(checkScrapeStatus, 2000);
+        }
+
         // Actualizar estadísticas en tiempo real
         loadStats();
+        loadJobHistory();
     } else {
         container.classList.remove('active');
         startBtn.disabled = false;
         stopBtn.style.display = 'none';
 
-        // Si había un polling y el job terminó, actualizar todo
-        if (result.job && ['completed', 'failed', 'stopped'].includes(result.job.status)) {
+        // Volver a polling lento cuando no hay scraping
+        if (state.fastPolling) {
+            state.fastPolling = false;
+            clearInterval(state.pollingInterval);
+            state.pollingInterval = setInterval(checkScrapeStatus, 10000);
             loadStats();
             loadJobHistory();
         }
@@ -810,3 +834,287 @@ function renderEmptyState(message) {
     `;
 }
 
+// ─── SELECCIÓN MASIVA ───────────────────────────────────
+
+function handleCardClick(event, contentId) {
+    if (state.selectionMode) {
+        toggleSelection(contentId);
+    } else {
+        openDetail(contentId);
+    }
+}
+
+function toggleSelection(contentId) {
+    if (!state.selectionMode) enterSelectionMode();
+
+    if (state.selectedItems.has(contentId)) {
+        state.selectedItems.delete(contentId);
+    } else {
+        state.selectedItems.add(contentId);
+    }
+
+    // Actualizar visual de la tarjeta
+    const card = document.querySelector(`.content-card[data-id="${contentId}"]`);
+    if (card) {
+        card.classList.toggle('selected', state.selectedItems.has(contentId));
+        const cb = card.querySelector('.card-checkbox');
+        if (cb) cb.textContent = state.selectedItems.has(contentId) ? '✓' : '';
+    }
+
+    updateBulkToolbar();
+}
+
+function enterSelectionMode() {
+    state.selectionMode = true;
+    // Activar modo selección en todas las páginas de contenido
+    document.querySelectorAll('.content-grid').forEach(g => g.classList.add('selection-mode'));
+    document.getElementById('bulkToolbar').classList.add('active');
+    document.getElementById('bulkCount').textContent = '0 seleccionados';
+}
+
+function exitSelectionMode() {
+    state.selectionMode = false;
+    state.selectedItems.clear();
+    document.querySelectorAll('.content-grid').forEach(g => g.classList.remove('selection-mode'));
+    document.querySelectorAll('.content-card.selected').forEach(c => {
+        c.classList.remove('selected');
+        const cb = c.querySelector('.card-checkbox');
+        if (cb) cb.textContent = '';
+    });
+    document.getElementById('bulkToolbar').classList.remove('active');
+}
+
+function selectAllVisible() {
+    const currentGrid = document.querySelector('.page.active .content-grid');
+    if (!currentGrid) return;
+
+    currentGrid.querySelectorAll('.content-card').forEach(card => {
+        const id = parseInt(card.dataset.id);
+        if (id) {
+            state.selectedItems.add(id);
+            card.classList.add('selected');
+            const cb = card.querySelector('.card-checkbox');
+            if (cb) cb.textContent = '✓';
+        }
+    });
+    updateBulkToolbar();
+}
+
+function updateBulkToolbar() {
+    const count = state.selectedItems.size;
+    document.getElementById('bulkCount').textContent = `${count} seleccionado${count !== 1 ? 's' : ''}`;
+
+    if (count === 0 && state.selectionMode) {
+        exitSelectionMode();
+    }
+}
+
+async function bulkGenerate() {
+    const contentIds = Array.from(state.selectedItems);
+    if (contentIds.length === 0) {
+        showToast('Selecciona al menos una película', 'error');
+        return;
+    }
+
+    const password = document.getElementById('bulkPassword').value;
+
+    // Usar todos los servidores por defecto en masivo
+    const uploadServers = ['desu', 'okru', 'netu', 'seekstreaming', 'buzzheavier',
+                           'googledrive', 'mediafire', 'mega', 'ranoz', 'pixeldrain'];
+
+    // Mostrar panel de resultados con loader
+    const overlay = document.getElementById('bulkResultsOverlay');
+    const content = document.getElementById('bulkResultsContent');
+    overlay.classList.add('active');
+    content.innerHTML = `
+        <div class="loader active"><div class="spinner"></div>
+            Generando comandos para ${contentIds.length} título(s)...<br>
+            <small style="color:var(--text-muted)">Buscando TMDB IDs automáticamante y generando comandos...</small>
+        </div>
+    `;
+
+    const result = await api('/api/content/bulk-generate', {
+        method: 'POST',
+        body: JSON.stringify({
+            content_ids: contentIds,
+            upload_servers: uploadServers,
+            password: password,
+            auto_resolve_tmdb: true,
+        }),
+    });
+
+    if (!result || result.error) {
+        content.innerHTML = `<p style="color:var(--danger)">Error: ${result?.message || 'Error desconocido'}</p>`;
+        return;
+    }
+
+    // Renderizar resultados
+    let html = '';
+
+    // Resumen
+    html += `<div style="margin-bottom:16px;padding:12px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">`;
+    html += `<p style="font-size:13px"><strong>✅ ${result.processed} título(s) procesado(s)</strong> · ${result.total} comando(s) generado(s)</p>`;
+    if (result.errors.length > 0) {
+        html += `<div style="margin-top:8px;font-size:12px;color:var(--danger)">`;
+        html += `<strong>⚠️ ${result.errors.length} error(es):</strong><br>`;
+        result.errors.forEach(e => { html += `• ${escapeHtml(e)}<br>`; });
+        html += `</div>`;
+    }
+    html += `</div>`;
+
+    if (result.commands.length > 0) {
+        // Botón copiar todos
+        const allCmds = result.commands.map(c => c.command).join(' ');
+        html += `<button class="btn btn-primary btn-sm" style="margin-bottom:14px" onclick="copyToClipboard(document.getElementById('allBulkCmds').textContent)">📋 Copiar todos (${result.total})</button>`;
+        html += `<button class="btn btn-outline btn-sm" style="margin-bottom:14px;margin-left:8px" onclick="addAllToQueue(${JSON.stringify(result.commands).replace(/"/g, '&quot;')})">📦 Agregar todos a la cola</button>`;
+        html += `<pre id="allBulkCmds" style="display:none">${escapeHtml(allCmds)}</pre>`;
+
+        // Agrupar por título
+        const grouped = {};
+        result.commands.forEach(cmd => {
+            const key = `${cmd.title} (TMDB: ${cmd.tmdb_id})`;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(cmd);
+        });
+
+        for (const [title, cmds] of Object.entries(grouped)) {
+            html += `<div style="margin-bottom:16px">`;
+            html += `<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px">🎬 ${escapeHtml(title)}</div>`;
+
+            cmds.forEach(cmd => {
+                html += `
+                    <div class="cmd-block">
+                        <div class="cmd-label">
+                            <span class="quality-badge">${escapeHtml(cmd.quality || 'N/A')}</span>
+                            ${escapeHtml(cmd.language || '')} · ${cmd.server}
+                        </div>
+                        <pre>${escapeHtml(cmd.command)}</pre>
+                        <button class="copy-btn" onclick="copyToClipboard(this.previousElementSibling.textContent)">📋</button>
+                    </div>
+                `;
+            });
+
+            html += `</div>`;
+        }
+    }
+
+    content.innerHTML = html;
+}
+
+function closeBulkResults() {
+    document.getElementById('bulkResultsOverlay').classList.remove('active');
+}
+
+// ─── COLA DE COMANDOS ───────────────────────────────────
+
+function updateQueueBadge() {
+    const badge = document.getElementById('queueBadge');
+    const count = state.commandQueue.length;
+    if (badge) {
+        badge.textContent = count;
+        badge.parentElement.style.display = count > 0 ? 'flex' : 'none';
+    }
+}
+
+async function loadQueueCount() {
+    const result = await api('/api/queue');
+    if (result && !result.error) {
+        state.commandQueue = result.commands;
+        updateQueueBadge();
+    }
+}
+
+async function addOneToQueue(cmd) {
+    const result = await api('/api/queue/add', {
+        method: 'POST',
+        body: JSON.stringify({ commands: [cmd] }),
+    });
+    if (result && !result.error) {
+        state.commandQueue.push(cmd);
+        updateQueueBadge();
+        showToast('Comando agregado a la cola', 'success');
+    }
+}
+
+async function addAllToQueue(commands) {
+    const result = await api('/api/queue/add', {
+        method: 'POST',
+        body: JSON.stringify({ commands }),
+    });
+    if (result && !result.error) {
+        commands.forEach(c => state.commandQueue.push(c));
+        updateQueueBadge();
+        showToast(`${commands.length} comando(s) agregado(s) a la cola`, 'success');
+    }
+}
+
+async function openQueuePanel() {
+    const overlay = document.getElementById('bulkResultsOverlay');
+    const content = document.getElementById('bulkResultsContent');
+    overlay.classList.add('active');
+    content.innerHTML = '<div class="loader active"><div class="spinner"></div>Cargando cola...</div>';
+
+    const result = await api('/api/queue');
+    if (!result || result.error) {
+        content.innerHTML = '<p style="color:var(--danger)">Error cargando la cola</p>';
+        return;
+    }
+
+    state.commandQueue = result.commands;
+    updateQueueBadge();
+
+    if (result.commands.length === 0) {
+        content.innerHTML = '<p style="color:var(--text-muted);padding:20px;text-align:center">La cola de comandos está vacía.<br>Agrega comandos con el botón ➕ Cola desde el detalle de una película.</p>';
+        return;
+    }
+
+    let html = '';
+    const total = result.commands.length;
+    const allCmds = result.commands.map(c => c.command).join(' ');
+
+    html += `<div style="margin-bottom:16px;padding:12px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">`;
+    html += `<p style="font-size:13px"><strong>📦 ${total} comando(s) en la cola</strong></p>`;
+    html += `</div>`;
+
+    html += `<div style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap">`;
+    html += `<button class="btn btn-primary btn-sm" onclick="copyToClipboard(document.getElementById('allQueueCmds').textContent)">📋 Copiar todos (${total})</button>`;
+    html += `<button class="btn btn-danger btn-sm" onclick="clearQueue()">🗑️ Limpiar cola</button>`;
+    html += `</div>`;
+    html += `<pre id="allQueueCmds" style="display:none">${escapeHtml(allCmds)}</pre>`;
+
+    const grouped = {};
+    result.commands.forEach(cmd => {
+        const key = `${cmd.title} (TMDB: ${cmd.tmdb_id})`;
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(cmd);
+    });
+
+    for (const [title, cmds] of Object.entries(grouped)) {
+        html += `<div style="margin-bottom:16px">`;
+        html += `<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px">🎬 ${escapeHtml(title)} <span style="font-weight:400;color:var(--text-muted)">(${cmds.length})</span></div>`;
+        cmds.forEach(cmd => {
+            html += `
+                <div class="cmd-block">
+                    <div class="cmd-label">
+                        <span class="quality-badge">${escapeHtml(cmd.quality || 'N/A')}</span>
+                        ${escapeHtml(cmd.language || '')} · ${cmd.server || ''}
+                    </div>
+                    <pre>${escapeHtml(cmd.command)}</pre>
+                    <button class="copy-btn" onclick="copyToClipboard(this.previousElementSibling.textContent)">📋</button>
+                </div>
+            `;
+        });
+        html += `</div>`;
+    }
+
+    content.innerHTML = html;
+}
+
+async function clearQueue() {
+    if (!confirm(`¿Limpiar los ${state.commandQueue.length} comando(s) de la cola?`)) return;
+    await api('/api/queue/clear', { method: 'POST' });
+    state.commandQueue = [];
+    updateQueueBadge();
+    openQueuePanel();
+    showToast('Cola de comandos limpiada', 'success');
+}
