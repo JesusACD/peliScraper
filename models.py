@@ -34,6 +34,7 @@ class Content(db.Model):
     tagline = db.Column(db.Text)
     gallery = db.Column(db.Text)
     last_update = db.Column(db.String(30))
+    tmdb_id = db.Column(db.Integer)  # ID de TheMovieDB
     scraped_at = db.Column(db.DateTime, default=datetime.utcnow)
     downloads_scraped = db.Column(db.Boolean, default=False)
 
@@ -48,6 +49,7 @@ class Content(db.Model):
         return {
             'id': self.id,
             'external_id': self.external_id,
+            'tmdb_id': self.tmdb_id,
             'title': self.title,
             'original_title': self.original_title,
             'slug': self.slug,
@@ -84,6 +86,7 @@ class Content(db.Model):
         return {
             'id': self.id,
             'external_id': self.external_id,
+            'tmdb_id': self.tmdb_id,
             'title': self.title,
             'slug': self.slug,
             'content_type': self.content_type,

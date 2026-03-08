@@ -281,6 +281,177 @@ def export_data(export_type):
     return jsonify({'error': True, 'message': 'Formato no soportado. Usa json o csv'}), 400
 
 
+# ─── TMDB & GENERADOR DE COMANDOS ────────────────────────────
+
+@api.route('/api/tmdb/search')
+def tmdb_search():
+    """Busca en TMDB por título y año para obtener el TMDB ID."""
+    import requests as req
+    import random
+
+    title = request.args.get('title', '').strip()
+    year = request.args.get('year', '').strip()
+    content_type = request.args.get('type', 'movie')  # movie o tv
+
+    if not title:
+        return jsonify({'error': True, 'message': 'Título requerido'}), 400
+
+    # Pool de API keys de TMDB (rotación para evitar límites)
+    TMDB_API_KEYS = [
+        '10923b261ba94d897ac6b81148314a3f',
+        'b573d051ec65413c949e68169923f7ff',
+        'da40aaeca884d8c9a9a4c088917c474c',
+        '4e44d9029b1270a757cddc766a1bcb63',
+        '39151834c95219c3cae772b4465079d7',
+        '6bca0b74270a3299673d934c1bb11b4d',
+        '902ddd650dd51f569c2ef95468612ad1',
+        '4c7ff8e6151131469216f007e4be3b3d',
+        '21e3f055fa996f78a2886737bb6e7957',
+        '98325a9d3ed3ec225e41ccc4d360c817',
+        '3fd2be6f0c70a2a598f084ddfb75487c',
+        '9780d3ceee590a40bd3446da3f81171d',
+        '04c35731a5ee918f014970082a0088b1',
+        '516adf1e1567058f8ecbf30bf2eb9378',
+        '9b702a6b89b0278738dab62417267c49',
+    ]
+
+    search_type = 'movie' if content_type in ('movies', 'movie') else 'tv'
+    url = f'https://api.themoviedb.org/3/search/{search_type}'
+
+    # Limpiar título: quitar año entre paréntesis
+    import re
+    clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', title).strip()
+
+    # Intentar con varias keys hasta que funcione
+    last_error = None
+    random.shuffle(TMDB_API_KEYS)
+
+    for api_key in TMDB_API_KEYS[:3]:
+        params = {
+            'api_key': api_key,
+            'query': clean_title,
+            'language': 'es-MX',
+        }
+        if year:
+            params['year' if search_type == 'movie' else 'first_air_date_year'] = year
+
+        try:
+            response = req.get(url, params=params, timeout=10)
+            if response.status_code == 401:
+                last_error = 'API key inválida'
+                continue
+
+            data = response.json()
+            results = data.get('results', [])
+
+            # Devolver los primeros 5 resultados
+            simplified = []
+            for r in results[:5]:
+                simplified.append({
+                    'tmdb_id': r.get('id'),
+                    'title': r.get('title') or r.get('name', ''),
+                    'original_title': r.get('original_title') or r.get('original_name', ''),
+                    'year': (r.get('release_date') or r.get('first_air_date') or '')[:4],
+                    'poster': f"https://image.tmdb.org/t/p/w92{r['poster_path']}" if r.get('poster_path') else None,
+                    'overview': r.get('overview', '')[:100],
+                })
+
+            return jsonify({'error': False, 'results': simplified})
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return jsonify({'error': True, 'message': f'Error en búsqueda TMDB: {last_error}'}), 500
+
+
+@api.route('/api/content/<int:content_id>/set-tmdb', methods=['POST'])
+def set_tmdb_id(content_id):
+    """Asigna un TMDB ID a un contenido."""
+    content = Content.query.get_or_404(content_id)
+    data = request.get_json() or {}
+    tmdb_id = data.get('tmdb_id')
+
+    if not tmdb_id:
+        return jsonify({'error': True, 'message': 'tmdb_id requerido'}), 400
+
+    content.tmdb_id = tmdb_id
+    db.session.commit()
+
+    return jsonify({'error': False, 'message': f'TMDB ID {tmdb_id} asignado a "{content.title}"'})
+
+
+@api.route('/api/content/<int:content_id>/generate-command', methods=['POST'])
+def generate_command(content_id):
+    """Genera comandos CLI para procesar descargas."""
+    content = Content.query.get_or_404(content_id)
+    data = request.get_json() or {}
+
+    tmdb_id = data.get('tmdb_id') or content.tmdb_id
+    upload_servers = data.get('upload_servers', [])
+    password = data.get('password', '')
+
+    if not tmdb_id:
+        return jsonify({'error': True, 'message': 'Se requiere un TMDB ID. Búscalo primero.'}), 400
+
+    # Extraer año limpio del título o de la fecha
+    year = content.year or ''
+    if not year and content.release_date:
+        year = content.release_date[:4]
+
+    # Título limpio (sin año entre paréntesis)
+    import re
+    clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
+
+    # Generar un comando por cada enlace de descarga
+    commands = []
+    downloads = DownloadLink.query.filter_by(content_id=content.id).all()
+
+    for dl in downloads:
+        # Determinar calidad limpia
+        quality = dl.quality or ''
+        quality_clean = quality.replace('Dual ', '').replace('Full HD', '1080p').replace('HD', '720p')
+        if not quality_clean:
+            quality_clean = '1080p'
+
+        # Determinar idioma limpio
+        lang = dl.language or ''
+        lang_parts = [l.strip() for l in lang.split('/')]
+        lang_clean = lang_parts[0] if lang_parts else 'Latino'
+
+        # Construir comando base
+        cmd_parts = ['python main.py process']
+        cmd_parts.append(f'"{dl.url}"')
+        cmd_parts.append(f'-i {tmdb_id}')
+        cmd_parts.append(f'-t "{clean_title}"')
+        if year:
+            cmd_parts.append(f'-y {year}')
+        cmd_parts.append(f'-Q {quality_clean}')
+        cmd_parts.append(f'-l {lang_clean}')
+
+        if password:
+            cmd_parts.append(f'-p "{password}"')
+
+        # Agregar servidores de upload
+        for server in upload_servers:
+            cmd_parts.append(f'--upload {server}')
+
+        commands.append({
+            'command': ' '.join(cmd_parts),
+            'server': dl.server,
+            'quality': dl.quality,
+            'language': dl.language,
+            'url': dl.url,
+        })
+
+    return jsonify({
+        'error': False,
+        'commands': commands,
+        'total': len(commands),
+        'title': clean_title,
+        'tmdb_id': tmdb_id,
+    })
+
+
 # ─── UTILIDADES ──────────────────────────────────────────────
 
 @api.route('/api/genres')

@@ -381,6 +381,56 @@ async function openDetail(contentId) {
 
     bodyHtml += '</div>';
 
+    // ─── GENERADOR DE COMANDOS ──────────────────────────
+    bodyHtml += `
+        <div class="modal-section">
+            <h3>⚙️ Generador de Comandos</h3>
+            <div class="cmd-generator" id="cmdGenerator" data-content-id="${item.id}" data-content-type="${item.content_type}">
+                <!-- TMDB ID -->
+                <div style="margin-bottom:12px">
+                    <div class="cmd-config">
+                        <div class="field">
+                            <label>TMDB ID</label>
+                            <input type="number" id="cmdTmdbId" value="${item.tmdb_id || ''}" placeholder="ID de TheMovieDB" style="min-width:140px">
+                        </div>
+                        <button class="btn btn-outline btn-sm" onclick="searchTmdb(${item.id}, '${escapeHtml(item.title)}', '${item.year || ''}', '${item.content_type}')">
+                            🔍 Buscar en TMDB
+                        </button>
+                        ${item.tmdb_id ? `<span class="tmdb-id-display">✅ TMDB: ${item.tmdb_id}</span>` : ''}
+                    </div>
+                    <div id="tmdbResults"></div>
+                </div>
+
+                <!-- Contraseña y Servidores de Upload -->
+                <div class="cmd-config">
+                    <div class="field">
+                        <label>Contraseña (archivo)</label>
+                        <input type="text" id="cmdPassword" placeholder="ej: cc" style="min-width:100px">
+                    </div>
+                </div>
+
+                <div style="margin:10px 0">
+                    <label style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Servidores de upload</label>
+                    <div class="upload-servers-grid" id="uploadServers">
+                        ${UPLOAD_SERVERS.map(s => `
+                            <span class="upload-server-tag" data-server="${s}" onclick="toggleUploadServer(this)">${s}</span>
+                        `).join('')}
+                    </div>
+                    <div style="margin-top:6px">
+                        <button class="btn btn-outline btn-sm" onclick="selectAllUploadServers()">Seleccionar todos</button>
+                        <button class="btn btn-outline btn-sm" onclick="deselectAllUploadServers()">Deseleccionar</button>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" onclick="generateCommands(${item.id})" ${item.downloads.length === 0 ? 'disabled title=\"Primero extrae las descargas\"' : ''}>
+                    🚀 Generar Comandos
+                </button>
+
+                <div class="cmd-output" id="cmdOutput"></div>
+            </div>
+        </div>
+    `;
+
     // Embeds
     if (item.embeds && item.embeds.length > 0) {
         bodyHtml += `
@@ -407,15 +457,169 @@ async function openDetail(contentId) {
     // Info adicional
     bodyHtml += `
         <div class="modal-section" style="font-size:12px;color:var(--text-muted)">
-            <p>ID externo: ${item.external_id} | Scrapeado: ${item.scraped_at ? new Date(item.scraped_at).toLocaleString() : 'N/A'}</p>
+            <p>ID externo: ${item.external_id} | TMDB: ${item.tmdb_id || 'No asignado'} | Scrapeado: ${item.scraped_at ? new Date(item.scraped_at).toLocaleString() : 'N/A'}</p>
         </div>
     `;
 
     body.innerHTML = bodyHtml;
+
+    // Si no tiene TMDB ID, buscar automáticamente
+    if (!item.tmdb_id && item.title) {
+        searchTmdb(item.id, item.title, item.year || '', item.content_type);
+    }
 }
 
 function closeModal() {
     document.getElementById('detailModal').classList.remove('active');
+}
+
+// ─── GENERADOR DE COMANDOS ──────────────────────────────
+
+// Servidores de upload disponibles
+const UPLOAD_SERVERS = [
+    'desu', 'okru', 'netu', 'seekstreaming', 'buzzheavier',
+    'googledrive', 'mediafire', 'mega', 'ranoz', 'pixeldrain',
+];
+
+function toggleUploadServer(el) {
+    el.classList.toggle('active');
+}
+
+function selectAllUploadServers() {
+    document.querySelectorAll('.upload-server-tag').forEach(el => el.classList.add('active'));
+}
+
+function deselectAllUploadServers() {
+    document.querySelectorAll('.upload-server-tag').forEach(el => el.classList.remove('active'));
+}
+
+async function searchTmdb(contentId, title, year, contentType) {
+    // Limpiar el título: quitar año entre paréntesis
+    const cleanTitle = title.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+    const searchType = contentType === 'movies' ? 'movie' : 'tv';
+
+    const params = new URLSearchParams({ title: cleanTitle, year, type: searchType });
+    const result = await api(`/api/tmdb/search?${params}`);
+
+    const container = document.getElementById('tmdbResults');
+    if (!result || result.error || result.results.length === 0) {
+        container.innerHTML = '<p style="font-size:12px;color:var(--text-muted);margin:8px 0">No se encontraron resultados en TMDB. Intenta buscar manualmente.</p>';
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="tmdb-search-results">
+            ${result.results.map(r => `
+                <div class="tmdb-result" onclick="selectTmdbResult(${contentId}, ${r.tmdb_id}, this)">
+                    ${r.poster ? `<img src="${r.poster}" alt="">` : '<div style="width:34px;height:50px;background:var(--bg-card);border-radius:3px;flex-shrink:0"></div>'}
+                    <div class="tmdb-info">
+                        <strong>${escapeHtml(r.title)}</strong>
+                        <span>${r.year} · ID: ${r.tmdb_id}</span>
+                        ${r.original_title !== r.title ? `<br><span style="font-style:italic">${escapeHtml(r.original_title)}</span>` : ''}
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+
+    // Auto-seleccionar el primer resultado
+    if (result.results.length > 0) {
+        const firstResult = container.querySelector('.tmdb-result');
+        if (firstResult) {
+            selectTmdbResult(contentId, result.results[0].tmdb_id, firstResult);
+        }
+    }
+}
+
+async function selectTmdbResult(contentId, tmdbId, element) {
+    // Marcar como seleccionado
+    document.querySelectorAll('.tmdb-result').forEach(el => el.classList.remove('selected'));
+    element.classList.add('selected');
+
+    // Actualizar input
+    document.getElementById('cmdTmdbId').value = tmdbId;
+
+    // Guardar en la BD
+    await api(`/api/content/${contentId}/set-tmdb`, {
+        method: 'POST',
+        body: JSON.stringify({ tmdb_id: tmdbId }),
+    });
+
+    showToast(`TMDB ID ${tmdbId} asignado`, 'success');
+}
+
+async function generateCommands(contentId) {
+    const tmdbId = document.getElementById('cmdTmdbId').value;
+    const password = document.getElementById('cmdPassword').value;
+
+    if (!tmdbId) {
+        showToast('Selecciona o ingresa un TMDB ID primero', 'error');
+        return;
+    }
+
+    // Obtener servidores seleccionados
+    const uploadServers = [];
+    document.querySelectorAll('.upload-server-tag.active').forEach(el => {
+        uploadServers.push(el.dataset.server);
+    });
+
+    const result = await api(`/api/content/${contentId}/generate-command`, {
+        method: 'POST',
+        body: JSON.stringify({
+            tmdb_id: parseInt(tmdbId),
+            password,
+            upload_servers: uploadServers,
+        }),
+    });
+
+    if (!result || result.error) {
+        showToast(result?.message || 'Error generando comandos', 'error');
+        return;
+    }
+
+    const output = document.getElementById('cmdOutput');
+
+    if (result.commands.length === 0) {
+        output.innerHTML = '<p style="color:var(--text-muted);margin-top:12px">No hay enlaces de descarga para generar comandos.</p>';
+        return;
+    }
+
+    // Renderizar comandos
+    let html = `<p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">📋 ${result.total} comando(s) generado(s) para <strong>${escapeHtml(result.title)}</strong> (TMDB: ${result.tmdb_id})</p>`;
+
+    // Botón copiar todos
+    const allCmds = result.commands.map(c => c.command).join('\n');
+    html += `<button class="btn btn-outline btn-sm" style="margin-bottom:10px" onclick="copyToClipboard(\`${allCmds.replace(/`/g, '\\`')}\`)">📋 Copiar todos los comandos</button>`;
+
+    result.commands.forEach((cmd, i) => {
+        html += `
+            <div class="cmd-block">
+                <div class="cmd-label">
+                    <span class="quality-badge">${escapeHtml(cmd.quality || 'N/A')}</span>
+                    ${escapeHtml(cmd.language || '')} · ${extractServerName(cmd.url)}
+                </div>
+                <pre>${escapeHtml(cmd.command)}</pre>
+                <button class="copy-btn" onclick="copyToClipboard(this.previousElementSibling.textContent)">📋</button>
+            </div>
+        `;
+    });
+
+    output.innerHTML = html;
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('Copiado al portapapeles', 'success');
+    }).catch(() => {
+        // Fallback para navegadores sin soporte
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showToast('Copiado al portapapeles', 'success');
+    });
 }
 
 // ─── SCRAPING ───────────────────────────────────────────
@@ -605,3 +809,4 @@ function renderEmptyState(message) {
         </div>
     `;
 }
+

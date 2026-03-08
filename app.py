@@ -30,6 +30,18 @@ def create_app():
     with app.app_context():
         db.create_all()
 
+        # Migración: agregar columna tmdb_id si no existe
+        try:
+            from sqlalchemy import text, inspect
+            inspector = inspect(db.engine)
+            columns = [col['name'] for col in inspector.get_columns('content')]
+            if 'tmdb_id' not in columns:
+                db.session.execute(text('ALTER TABLE content ADD COLUMN tmdb_id INTEGER'))
+                db.session.commit()
+                print('✅ Columna tmdb_id agregada a la tabla content')
+        except Exception as e:
+            print(f'⚠️ Migración tmdb_id: {e}')
+
     # Inicializar el scraper con referencia a la app
     scraper_instance = LaMovieScraper(app=app)
     set_scraper(scraper_instance)
