@@ -223,6 +223,7 @@ function renderCard(item) {
             <div class="card-checkbox" onclick="event.stopPropagation(); toggleSelection(${item.id})">${isSelected ? '✓' : ''}</div>
             <span class="card-type-badge ${item.content_type}">${typeLabel.icon || ''} ${typeLabel.label || item.content_type}</span>
             ${item.downloads_scraped ? '<span class="card-download-badge" title="Descargas disponibles">📥</span>' : ''}
+            ${item.downloads_scraped ? `<button class="card-quick-cmd" onclick="event.stopPropagation(); quickGenerate(${item.id})" title="Generar comandos y agregar a la cola">⚡</button>` : ''}
             ${posterHtml}
             <div class="card-info">
                 <div class="card-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
@@ -474,6 +475,11 @@ async function openDetail(contentId) {
     if (!item.tmdb_id && item.title) {
         searchTmdb(item.id, item.title, item.year || '', item.content_type);
     }
+
+    // Auto-generar comandos si ya tiene TMDB ID y descargas
+    if (item.tmdb_id && item.downloads.length > 0) {
+        generateCommands(item.id);
+    }
 }
 
 function closeModal() {
@@ -498,6 +504,58 @@ function selectAllUploadServers() {
 
 function deselectAllUploadServers() {
     document.querySelectorAll('.upload-server-tag').forEach(el => el.classList.remove('active'));
+}
+
+// Generación rápida desde la tarjeta: un solo clic
+async function quickGenerate(contentId) {
+    // Feedback visual inmediato
+    const card = document.querySelector(`.content-card[data-id="${contentId}"]`);
+    const btn = card ? card.querySelector('.card-quick-cmd') : null;
+    if (btn) {
+        btn.classList.add('loading');
+        btn.textContent = '⏳';
+    }
+
+    const result = await api('/api/content/bulk-generate', {
+        method: 'POST',
+        body: JSON.stringify({
+            content_ids: [contentId],
+            upload_servers: UPLOAD_SERVERS,
+            password: 'cc',
+            auto_resolve_tmdb: true,
+        }),
+    });
+
+    if (btn) {
+        btn.classList.remove('loading');
+        btn.textContent = '⚡';
+    }
+
+    if (!result || result.error) {
+        showToast(result?.message || 'Error generando comandos', 'error');
+        return;
+    }
+
+    if (result.commands.length === 0) {
+        showToast('No se generaron comandos (sin descargas o TMDB no encontrado)', 'warning');
+        return;
+    }
+
+    // Agregar a la cola automáticamente
+    const queueResult = await api('/api/queue/add', {
+        method: 'POST',
+        body: JSON.stringify({ commands: result.commands }),
+    });
+
+    if (queueResult && !queueResult.error) {
+        result.commands.forEach(c => state.commandQueue.push(c));
+        updateQueueBadge();
+        if (btn) {
+            btn.textContent = '✅';
+            setTimeout(() => { btn.textContent = '⚡'; }, 1500);
+        }
+        showToast(`${result.commands.length} comando(s) agregado(s) a la cola · ${result.commands[0]?.title || ''}`, 'success');
+    }
 }
 
 async function searchTmdb(contentId, title, year, contentType) {
@@ -832,6 +890,117 @@ function renderEmptyState(message) {
             <p>Inicia un scraping desde el Dashboard para comenzar a recopilar datos.</p>
         </div>
     `;
+}
+
+// ─── GENERACIÓN MASIVA MEDIAFIRE POR PÁGINA ────────────
+
+async function generatePageMediafire(contentType) {
+    // Obtener el sufijo del DOM según el tipo de contenido
+    const suffix = TYPE_TO_DOM[contentType];
+    if (!suffix) return;
+
+    // Recopilar todos los IDs de las tarjetas visibles en la grilla activa
+    const grid = document.getElementById(`grid${suffix}`);
+    if (!grid) return;
+
+    const cards = grid.querySelectorAll('.content-card[data-id]');
+    const contentIds = Array.from(cards).map(c => parseInt(c.dataset.id)).filter(id => id);
+
+    if (contentIds.length === 0) {
+        showToast('No hay contenido visible en esta página', 'warning');
+        return;
+    }
+
+    // Mostrar overlay con loader
+    const overlay = document.getElementById('bulkResultsOverlay');
+    const content = document.getElementById('bulkResultsContent');
+    overlay.classList.add('active');
+    content.innerHTML = `
+        <div class="loader active"><div class="spinner"></div>
+            Generando comandos MediaFire para ${contentIds.length} título(s)...<br>
+            <small style="color:var(--text-muted)">Scrapeando descargas, filtrando MediaFire y resolviendo TMDB IDs...</small>
+        </div>
+    `;
+
+    // Servidores de upload y contraseña por defecto
+    const uploadServers = UPLOAD_SERVERS;
+    const password = 'cc';
+
+    const result = await api('/api/content/page-generate-mediafire', {
+        method: 'POST',
+        body: JSON.stringify({
+            content_ids: contentIds,
+            upload_servers: uploadServers,
+            password: password,
+            auto_resolve_tmdb: true,
+        }),
+    });
+
+    if (!result || result.error) {
+        content.innerHTML = `<p style="color:var(--danger)">Error: ${result?.message || 'Error desconocido'}</p>`;
+        return;
+    }
+
+    // Renderizar resultados
+    let html = '';
+
+    // Resumen
+    html += `<div style="margin-bottom:16px;padding:12px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">`;
+    html += `<p style="font-size:13px"><strong>🗂️ MediaFire · ${result.processed} título(s) con enlaces</strong> · ${result.total} comando(s) generado(s)</p>`;
+    if (result.scraped > 0) {
+        html += `<p style="font-size:12px;color:var(--accent);margin-top:4px">📥 ${result.scraped} título(s) scrapeados automáticamente desde la.movie</p>`;
+    }
+    if (result.skipped > 0) {
+        html += `<p style="font-size:12px;color:var(--text-muted);margin-top:4px">${result.skipped} título(s) sin enlaces de MediaFire (omitidos)</p>`;
+    }
+    if (result.errors.length > 0) {
+        html += `<div style="margin-top:8px;font-size:12px;color:var(--danger)">`;
+        html += `<strong>⚠️ ${result.errors.length} error(es):</strong><br>`;
+        result.errors.forEach(e => { html += `• ${escapeHtml(e)}<br>`; });
+        html += `</div>`;
+    }
+    html += `</div>`;
+
+    if (result.commands.length > 0) {
+        // Botones de acción
+        const allCmds = result.commands.map(c => c.command).join(' ');
+        html += `<button class="btn btn-primary btn-sm" style="margin-bottom:14px" onclick="copyToClipboard(document.getElementById('allMfCmds').textContent)">📋 Copiar todos (${result.total})</button>`;
+        html += `<button class="btn btn-outline btn-sm" style="margin-bottom:14px;margin-left:8px" onclick="addAllToQueue(${JSON.stringify(result.commands).replace(/"/g, '&quot;')})">📦 Agregar todos a la cola</button>`;
+        html += `<pre id="allMfCmds" style="display:none">${escapeHtml(allCmds)}</pre>`;
+
+        // Agrupar por título
+        const grouped = {};
+        result.commands.forEach(cmd => {
+            const key = `${cmd.title} (TMDB: ${cmd.tmdb_id})`;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(cmd);
+        });
+
+        for (const [title, cmds] of Object.entries(grouped)) {
+            html += `<div style="margin-bottom:16px">`;
+            html += `<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px">🎬 ${escapeHtml(title)} <span style="font-weight:400;color:var(--text-muted)">(${cmds.length})</span></div>`;
+
+            cmds.forEach(cmd => {
+                html += `
+                    <div class="cmd-block" style="border-left:3px solid #4ade80">
+                        <div class="cmd-label">
+                            <span class="quality-badge">${escapeHtml(cmd.quality || 'N/A')}</span>
+                            ${escapeHtml(cmd.language || '')} · ${cmd.server}
+                        </div>
+                        <pre>${escapeHtml(cmd.command)}</pre>
+                        <button class="copy-btn" style="right:50px" onclick="copyToClipboard(this.previousElementSibling.textContent)">📋</button>
+                        <button class="copy-btn" onclick="addOneToQueue(${JSON.stringify(cmd).replace(/"/g, '&quot;')})">➕</button>
+                    </div>
+                `;
+            });
+
+            html += `</div>`;
+        }
+    } else {
+        html += `<p style="color:var(--text-muted);text-align:center;padding:20px">No se encontraron enlaces de MediaFire en los ${contentIds.length} título(s) de esta página.</p>`;
+    }
+
+    content.innerHTML = html;
 }
 
 // ─── SELECCIÓN MASIVA ───────────────────────────────────

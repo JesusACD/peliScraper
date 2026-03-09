@@ -716,6 +716,54 @@ input[type="number"]:focus {
   font-size: 12px;
 }
 
+/* Botón rápido ⚡ en la tarjeta */
+.card-quick-cmd {
+  position: absolute;
+  bottom: 72px;
+  right: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--movie-color));
+  color: white;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.7);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 5;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.5);
+}
+
+.content-card:hover .card-quick-cmd {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.card-quick-cmd:hover {
+  transform: scale(1.15) !important;
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.7);
+}
+
+.card-quick-cmd:active {
+  transform: scale(0.95) !important;
+}
+
+.card-quick-cmd.loading {
+  opacity: 1;
+  transform: scale(1);
+  animation: quickCmdPulse 1s ease-in-out infinite;
+}
+
+@keyframes quickCmdPulse {
+  0%, 100% { box-shadow: 0 4px 14px rgba(99, 102, 241, 0.5); }
+  50% { box-shadow: 0 4px 24px rgba(99, 102, 241, 0.9); }
+}
+
 /* ─── PAGINACIÓN ─────────────────────────────────────── */
 .pagination {
   display: flex;

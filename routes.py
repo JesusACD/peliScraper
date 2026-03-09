@@ -586,6 +586,204 @@ def bulk_generate_commands():
     })
 
 
+def _build_command(dl, tmdb_id, clean_title, year, password='', upload_servers=None):
+    """Construye un comando CLI a partir de un enlace de descarga."""
+    # Determinar calidad limpia
+    quality = dl.quality or ''
+    quality_clean = quality.replace('Dual ', '').replace('Full HD', '1080p').replace('HD', '720p')
+    if not quality_clean:
+        quality_clean = '1080p'
+
+    # Determinar idioma limpio
+    lang = dl.language or ''
+    lang_parts = [l.strip() for l in lang.split('/')]
+    lang_clean = lang_parts[0] if lang_parts else 'Latino'
+
+    # Construir comando base
+    cmd_parts = ['python main.py process']
+    cmd_parts.append(f'"{dl.url}"')
+    cmd_parts.append(f'-i {tmdb_id}')
+    cmd_parts.append(f'-t "{clean_title}"')
+    if year:
+        cmd_parts.append(f'-y {year}')
+    cmd_parts.append(f'-Q {quality_clean}')
+    cmd_parts.append(f'-l {lang_clean}')
+
+    if password:
+        cmd_parts.append(f'-p "{password}"')
+
+    # Agregar servidores de upload
+    for server in (upload_servers or []):
+        cmd_parts.append(f'--upload {server}')
+
+    return {
+        'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
+        'title': clean_title,
+        'tmdb_id': tmdb_id,
+        'quality': dl.quality,
+        'language': dl.language,
+        'server': extractServerNamePy(dl.url),
+        'url': dl.url,
+    }
+
+
+@api.route('/api/content/page-generate-mediafire', methods=['POST'])
+def page_generate_mediafire():
+    """Genera comandos CLI solo para enlaces de MediaFire de los contenidos indicados.
+       Auto-scrapea descargas si no han sido extraídas aún."""
+    import requests as req
+    import random
+    import re
+    import time
+
+    data = request.get_json() or {}
+    content_ids = data.get('content_ids', [])
+    upload_servers = data.get('upload_servers', [])
+    password = data.get('password', '')
+    auto_resolve_tmdb = data.get('auto_resolve_tmdb', True)
+
+    if not content_ids:
+        return jsonify({'error': True, 'message': 'No se enviaron IDs de contenido'}), 400
+
+    # Pool de API keys para TMDB
+    TMDB_API_KEYS = [
+        '10923b261ba94d897ac6b81148314a3f',
+        'b573d051ec65413c949e68169923f7ff',
+        'da40aaeca884d8c9a9a4c088917c474c',
+        '4e44d9029b1270a757cddc766a1bcb63',
+        '39151834c95219c3cae772b4465079d7',
+        '6bca0b74270a3299673d934c1bb11b4d',
+        '902ddd650dd51f569c2ef95468612ad1',
+        '4c7ff8e6151131469216f007e4be3b3d',
+        '21e3f055fa996f78a2886737bb6e7957',
+        '98325a9d3ed3ec225e41ccc4d360c817',
+        '3fd2be6f0c70a2a598f084ddfb75487c',
+    ]
+
+    all_results = []
+    errors = []
+    skipped = 0
+    scraped_count = 0
+
+    for cid in content_ids:
+        content = Content.query.get(cid)
+        if not content:
+            continue
+
+        # Auto-scrapear descargas si no se han extraído aún
+        if not content.downloads_scraped and scraper:
+            try:
+                player_data = scraper.fetch_player(content.external_id)
+                time.sleep(0.3)
+
+                if player_data and not player_data.get('error'):
+                    pdata = player_data.get('data', {})
+
+                    # Limpiar descargas y embeds existentes
+                    DownloadLink.query.filter_by(content_id=content.id).delete()
+                    EmbedLink.query.filter_by(content_id=content.id).delete()
+
+                    # Guardar descargas
+                    for dl in pdata.get('downloads', []):
+                        download = DownloadLink(
+                            content_id=content.id,
+                            url=dl.get('url', ''),
+                            server=dl.get('server', ''),
+                            quality=dl.get('quality', ''),
+                            language=dl.get('lang', ''),
+                            size=dl.get('size'),
+                            subtitle=dl.get('subtitle', 0),
+                            format=dl.get('format'),
+                            resolution=dl.get('resolution'),
+                        )
+                        db.session.add(download)
+
+                    # Guardar embeds
+                    for em in pdata.get('embeds', []):
+                        embed = EmbedLink(
+                            content_id=content.id,
+                            url=em.get('url', ''),
+                            server=em.get('server', ''),
+                            quality=em.get('quality', ''),
+                            language=em.get('lang', ''),
+                            subtitle=em.get('subtitle', 0),
+                        )
+                        db.session.add(embed)
+
+                    content.downloads_scraped = True
+                    db.session.commit()
+                    scraped_count += 1
+            except Exception as e:
+                db.session.rollback()
+                errors.append(f'"{content.title}" - Error scrapeando descargas: {str(e)[:50]}')
+                continue
+
+        tmdb_id = content.tmdb_id
+
+        # Auto-resolver TMDB ID si no tiene
+        if not tmdb_id and auto_resolve_tmdb:
+            clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
+            search_type = 'movie' if content.content_type in ('movies',) else 'tv'
+            year = content.year or ''
+
+            api_key = random.choice(TMDB_API_KEYS)
+            params = {
+                'api_key': api_key,
+                'query': clean_title,
+                'language': 'es-MX',
+            }
+            if year:
+                params['year' if search_type == 'movie' else 'first_air_date_year'] = year
+
+            try:
+                resp = req.get(
+                    f'https://api.themoviedb.org/3/search/{search_type}',
+                    params=params, timeout=10
+                )
+                if resp.status_code == 200:
+                    results = resp.json().get('results', [])
+                    if results:
+                        tmdb_id = results[0]['id']
+                        content.tmdb_id = tmdb_id
+                        db.session.commit()
+                time.sleep(0.3)
+            except Exception:
+                pass
+
+        if not tmdb_id:
+            errors.append(f'"{content.title}" - No se pudo obtener TMDB ID')
+            continue
+
+        # Preparar título y año
+        year = content.year or ''
+        if not year and content.release_date:
+            year = content.release_date[:4]
+        clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
+
+        # Obtener solo descargas de MediaFire
+        downloads = DownloadLink.query.filter_by(content_id=content.id).all()
+        mf_downloads = [dl for dl in downloads if dl.url and 'mediafire' in dl.url.lower()]
+
+        if not mf_downloads:
+            skipped += 1
+            continue
+
+        for dl in mf_downloads:
+            all_results.append(
+                _build_command(dl, tmdb_id, clean_title, year, password, upload_servers)
+            )
+
+    return jsonify({
+        'error': False,
+        'commands': all_results,
+        'total': len(all_results),
+        'errors': errors,
+        'skipped': skipped,
+        'scraped': scraped_count,
+        'processed': len(content_ids) - len(errors) - skipped,
+    })
+
+
 def extractServerNamePy(url):
     """Extrae nombre del servidor de una URL."""
     try:
