@@ -971,18 +971,46 @@ async function generatePageMediafire(contentType) {
         // Agrupar por título
         const grouped = {};
         result.commands.forEach(cmd => {
-            const key = `${cmd.title} (TMDB: ${cmd.tmdb_id})`;
+            const key = `${cmd.title}|||${cmd.tmdb_id}|||${cmd.poster || ''}|||${cmd.content_type || 'movies'}|||${cmd.year || ''}`;
             if (!grouped[key]) grouped[key] = [];
             grouped[key].push(cmd);
         });
 
-        for (const [title, cmds] of Object.entries(grouped)) {
-            html += `<div style="margin-bottom:16px">`;
-            html += `<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px">🎬 ${escapeHtml(title)} <span style="font-weight:400;color:var(--text-muted)">(${cmds.length})</span></div>`;
+        for (const [key, cmds] of Object.entries(grouped)) {
+            const [title, tmdbId, poster, cType, year] = key.split('|||');
+            const tmdbType = cType === 'movies' ? 'movie' : 'tv';
+            const tmdbUrl = `https://www.themoviedb.org/${tmdbType}/${tmdbId}`;
 
+            html += `<div style="margin-bottom:20px;padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">`;
+
+            // Encabezado con poster y título
+            html += `<div style="display:flex;gap:14px;margin-bottom:12px">`;
+
+            // Poster
+            if (poster) {
+                html += `<img src="${escapeHtml(poster)}" alt="" style="width:70px;height:105px;object-fit:cover;border-radius:6px;flex-shrink:0" onerror="this.style.display='none'">`;
+            } else {
+                html += `<div style="width:70px;height:105px;background:var(--bg-main);border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:28px">🎬</div>`;
+            }
+
+            // Info del título + TMDB
+            html += `<div style="flex:1;min-width:0">`;
+            html += `<div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px">${escapeHtml(title)}</div>`;
+            html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">${year ? year + ' · ' : ''}TMDB: ${tmdbId} · ${cmds.length} comando(s)</div>`;
+
+            // Botones TMDB
+            html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
+            html += `<a href="${tmdbUrl}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" style="font-size:11px;text-decoration:none">🔍 Ver en TMDB</a>`;
+            html += `<button class="btn btn-outline btn-sm" style="font-size:11px" onclick="window.open('https://www.themoviedb.org/search?query=${encodeURIComponent(title)}','_blank')">🔎 Buscar en TMDB</button>`;
+            html += `</div>`;
+
+            html += `</div>`;
+            html += `</div>`;
+
+            // Comandos
             cmds.forEach(cmd => {
                 html += `
-                    <div class="cmd-block" style="border-left:3px solid #4ade80">
+                    <div class="cmd-block" style="border-left:3px solid #4ade80;margin-bottom:6px">
                         <div class="cmd-label">
                             <span class="quality-badge">${escapeHtml(cmd.quality || 'N/A')}</span>
                             ${escapeHtml(cmd.language || '')} · ${cmd.server}

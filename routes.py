@@ -586,7 +586,7 @@ def bulk_generate_commands():
     })
 
 
-def _build_command(dl, tmdb_id, clean_title, year, password='', upload_servers=None):
+def _build_command(dl, tmdb_id, clean_title, year, password='', upload_servers=None, poster=None, content_type='movies'):
     """Construye un comando CLI a partir de un enlace de descarga."""
     # Determinar calidad limpia
     quality = dl.quality or ''
@@ -624,6 +624,9 @@ def _build_command(dl, tmdb_id, clean_title, year, password='', upload_servers=N
         'language': dl.language,
         'server': extractServerNamePy(dl.url),
         'url': dl.url,
+        'poster': poster,
+        'content_type': content_type,
+        'year': year,
     }
 
 
@@ -770,7 +773,8 @@ def page_generate_mediafire():
 
         for dl in mf_downloads:
             all_results.append(
-                _build_command(dl, tmdb_id, clean_title, year, password, upload_servers)
+                _build_command(dl, tmdb_id, clean_title, year, password, upload_servers,
+                               poster=content.poster, content_type=content.content_type)
             )
 
     return jsonify({
