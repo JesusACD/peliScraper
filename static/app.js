@@ -968,49 +968,57 @@ async function generatePageMediafire(contentType) {
         html += `<button class="btn btn-outline btn-sm" style="margin-bottom:14px;margin-left:8px" onclick="addAllToQueue(${JSON.stringify(result.commands).replace(/"/g, '&quot;')})">📦 Agregar todos a la cola</button>`;
         html += `<pre id="allMfCmds" style="display:none">${escapeHtml(allCmds)}</pre>`;
 
-        // Agrupar por título
+        // Agrupar por título y content_id
         const grouped = {};
+        let groupIdx = 0;
         result.commands.forEach(cmd => {
-            const key = `${cmd.title}|||${cmd.tmdb_id}|||${cmd.poster || ''}|||${cmd.content_type || 'movies'}|||${cmd.year || ''}`;
-            if (!grouped[key]) grouped[key] = [];
-            grouped[key].push(cmd);
+            const key = `${cmd.content_id}`;
+            if (!grouped[key]) {
+                grouped[key] = { cmds: [], title: cmd.title, tmdbId: cmd.tmdb_id, poster: cmd.poster || '', cType: cmd.content_type || 'movies', year: cmd.year || '', idx: groupIdx++ };
+            }
+            grouped[key].cmds.push(cmd);
         });
 
-        for (const [key, cmds] of Object.entries(grouped)) {
-            const [title, tmdbId, poster, cType, year] = key.split('|||');
+        for (const [contentId, group] of Object.entries(grouped)) {
+            const { cmds, title, tmdbId, poster, cType, year, idx } = group;
             const tmdbType = cType === 'movies' ? 'movie' : 'tv';
             const tmdbUrl = `https://www.themoviedb.org/${tmdbType}/${tmdbId}`;
 
-            html += `<div style="margin-bottom:20px;padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">`;
+            html += `<div id="mfGroup_${idx}" style="margin-bottom:20px;padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">`;
 
             // Encabezado con poster y título
             html += `<div style="display:flex;gap:14px;margin-bottom:12px">`;
 
             // Poster
+            html += `<div id="mfPoster_${idx}" style="flex-shrink:0">`;
             if (poster) {
-                html += `<img src="${escapeHtml(poster)}" alt="" style="width:70px;height:105px;object-fit:cover;border-radius:6px;flex-shrink:0" onerror="this.style.display='none'">`;
+                html += `<img src="${escapeHtml(poster)}" alt="" style="width:70px;height:105px;object-fit:cover;border-radius:6px" onerror="this.style.display='none'">`;
             } else {
-                html += `<div style="width:70px;height:105px;background:var(--bg-main);border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:28px">🎬</div>`;
+                html += `<div style="width:70px;height:105px;background:var(--bg-main);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:28px">🎬</div>`;
             }
+            html += `</div>`;
 
             // Info del título + TMDB
             html += `<div style="flex:1;min-width:0">`;
             html += `<div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px">${escapeHtml(title)}</div>`;
-            html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">${year ? year + ' · ' : ''}TMDB: ${tmdbId} · ${cmds.length} comando(s)</div>`;
+            html += `<div id="mfTmdbInfo_${idx}" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">${year ? year + ' · ' : ''}TMDB: <a href="${tmdbUrl}" target="_blank" style="color:var(--accent)">${tmdbId}</a> · ${cmds.length} comando(s)</div>`;
 
-            // Botones TMDB
+            // Botón Buscar en TMDB (inline)
             html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
+            html += `<button class="btn btn-outline btn-sm" style="font-size:11px" onclick="searchTmdbForMf(${contentId}, '${escapeHtml(title).replace(/'/g, "\\'")}', '${year}', '${cType}', ${idx})">🔎 Buscar en TMDB</button>`;
             html += `<a href="${tmdbUrl}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" style="font-size:11px;text-decoration:none">🔍 Ver en TMDB</a>`;
-            html += `<button class="btn btn-outline btn-sm" style="font-size:11px" onclick="window.open('https://www.themoviedb.org/search?query=${encodeURIComponent(title)}','_blank')">🔎 Buscar en TMDB</button>`;
             html += `</div>`;
 
             html += `</div>`;
             html += `</div>`;
+
+            // Contenedor de resultados TMDB (se llena al buscar)
+            html += `<div id="mfTmdbResults_${idx}" style="margin-bottom:10px"></div>`;
 
             // Comandos
-            cmds.forEach(cmd => {
+            cmds.forEach((cmd, ci) => {
                 html += `
-                    <div class="cmd-block" style="border-left:3px solid #4ade80;margin-bottom:6px">
+                    <div class="cmd-block" id="mfCmd_${idx}_${ci}" style="border-left:3px solid #4ade80;margin-bottom:6px" data-url="${escapeHtml(cmd.url)}" data-quality="${escapeHtml(cmd.quality || '')}" data-language="${escapeHtml(cmd.language || '')}">
                         <div class="cmd-label">
                             <span class="quality-badge">${escapeHtml(cmd.quality || 'N/A')}</span>
                             ${escapeHtml(cmd.language || '')} · ${cmd.server}
@@ -1029,6 +1037,76 @@ async function generatePageMediafire(contentType) {
     }
 
     content.innerHTML = html;
+}
+
+// Buscar en TMDB desde el overlay de MediaFire
+async function searchTmdbForMf(contentId, title, year, contentType, groupIdx) {
+    const cleanTitle = title.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+    const searchType = contentType === 'movies' ? 'movie' : 'tv';
+
+    const container = document.getElementById(`mfTmdbResults_${groupIdx}`);
+    container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">Buscando en TMDB...</div>';
+
+    const params = new URLSearchParams({ title: cleanTitle, year, type: searchType });
+    const result = await api(`/api/tmdb/search?${params}`);
+
+    if (!result || result.error || !result.results || result.results.length === 0) {
+        container.innerHTML = '<p style="font-size:12px;color:var(--text-muted);margin:8px 0">No se encontraron resultados en TMDB.</p>';
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="tmdb-search-results" style="margin:8px 0">
+            ${result.results.map(r => `
+                <div class="tmdb-result" onclick="selectTmdbForMf(${contentId}, ${r.tmdb_id}, this, ${groupIdx}, '${(r.poster || '').replace(/'/g, "\\'")}', '${escapeHtml(r.title).replace(/'/g, "\\'")}')" style="cursor:pointer">
+                    ${r.poster ? `<img src="${r.poster}" alt="">` : '<div style="width:34px;height:50px;background:var(--bg-card);border-radius:3px;flex-shrink:0"></div>'}
+                    <div class="tmdb-info">
+                        <strong>${escapeHtml(r.title)}</strong>
+                        <span>${r.year} · ID: ${r.tmdb_id}</span>
+                        ${r.original_title !== r.title ? `<br><span style="font-style:italic">${escapeHtml(r.original_title)}</span>` : ''}
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+// Seleccionar un resultado TMDB y actualizar comandos del grupo
+async function selectTmdbForMf(contentId, newTmdbId, element, groupIdx, newPoster, newTitle) {
+    // Marcar como seleccionado
+    const container = element.parentElement;
+    container.querySelectorAll('.tmdb-result').forEach(el => el.classList.remove('selected'));
+    element.classList.add('selected');
+
+    // Guardar en la BD
+    await api(`/api/content/${contentId}/set-tmdb`, {
+        method: 'POST',
+        body: JSON.stringify({ tmdb_id: newTmdbId }),
+    });
+
+    // Actualizar poster
+    const posterEl = document.getElementById(`mfPoster_${groupIdx}`);
+    if (newPoster) {
+        posterEl.innerHTML = `<img src="${newPoster}" alt="" style="width:70px;height:105px;object-fit:cover;border-radius:6px">`;
+    }
+
+    // Actualizar info TMDB
+    const infoEl = document.getElementById(`mfTmdbInfo_${groupIdx}`);
+    if (infoEl) {
+        const tmdbUrl = `https://www.themoviedb.org/movie/${newTmdbId}`;
+        infoEl.innerHTML = `TMDB: <a href="${tmdbUrl}" target="_blank" style="color:var(--accent)">${newTmdbId}</a> (actualizado ✅)`;
+    }
+
+    // Actualizar comandos: reemplazar el -i viejo por el nuevo
+    const group = document.getElementById(`mfGroup_${groupIdx}`);
+    if (group) {
+        const pres = group.querySelectorAll('.cmd-block pre');
+        pres.forEach(pre => {
+            pre.textContent = pre.textContent.replace(/-i \d+/, `-i ${newTmdbId}`);
+        });
+    }
+
+    showToast(`TMDB ID ${newTmdbId} asignado correctamente`, 'success');
 }
 
 // ─── SELECCIÓN MASIVA ───────────────────────────────────
