@@ -950,8 +950,8 @@ async function generatePageMediafire(contentType) {
     if (result.scraped > 0) {
         html += `<p style="font-size:12px;color:var(--accent);margin-top:4px">📥 ${result.scraped} título(s) scrapeados automáticamente desde la.movie</p>`;
     }
-    if (result.skipped > 0) {
-        html += `<p style="font-size:12px;color:var(--text-muted);margin-top:4px">${result.skipped} título(s) sin enlaces de MediaFire (omitidos)</p>`;
+    if (result.skipped_count > 0) {
+        html += `<p style="font-size:12px;color:var(--warning, #f59e0b);margin-top:4px">⚠️ ${result.skipped_count} título(s) sin enlaces de MediaFire</p>`;
     }
     if (result.errors.length > 0) {
         html += `<div style="margin-top:8px;font-size:12px;color:var(--danger)">`;
@@ -1034,6 +1034,37 @@ async function generatePageMediafire(contentType) {
         }
     } else {
         html += `<p style="color:var(--text-muted);text-align:center;padding:20px">No se encontraron enlaces de MediaFire en los ${contentIds.length} título(s) de esta página.</p>`;
+    }
+
+    // Sección de películas sin MediaFire (colapsable)
+    if (result.skipped && result.skipped.length > 0) {
+        html += `
+            <div style="margin-top:16px;border-top:1px solid var(--border-color);padding-top:16px">
+                <button class="btn btn-outline btn-sm" style="margin-bottom:12px" onclick="const s=document.getElementById('mfSkippedList');s.style.display=s.style.display==='none'?'block':'none'; this.textContent=s.style.display==='none'?'📂 Mostrar sin MediaFire (${result.skipped.length})':'📁 Ocultar sin MediaFire (${result.skipped.length})'">
+                    📂 Mostrar sin MediaFire (${result.skipped.length})
+                </button>
+                <div id="mfSkippedList" style="display:none">
+        `;
+
+        result.skipped.forEach(item => {
+            const servers = item.servers && item.servers.length > 0
+                ? item.servers.join(', ')
+                : 'Sin descargas';
+            html += `
+                <div style="display:flex;gap:10px;align-items:center;padding:8px 10px;margin-bottom:6px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color);border-left:3px solid var(--warning, #f59e0b)">
+                    ${item.poster
+                        ? `<img src="${escapeHtml(item.poster)}" alt="" style="width:36px;height:54px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+                        : `<div style="width:36px;height:54px;background:var(--bg-main);border-radius:4px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:16px">🎬</div>`
+                    }
+                    <div style="flex:1;min-width:0">
+                        <div style="font-size:13px;font-weight:600;color:var(--text-primary)">${escapeHtml(item.title)}</div>
+                        <div style="font-size:11px;color:var(--text-muted)">${item.year ? item.year + ' · ' : ''}${item.total_downloads} enlace(s) · Servidores: ${escapeHtml(servers)}</div>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += `</div></div>`;
     }
 
     content.innerHTML = html;

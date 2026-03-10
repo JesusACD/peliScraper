@@ -666,7 +666,7 @@ def page_generate_mediafire():
 
     all_results = []
     errors = []
-    skipped = 0
+    skipped = []
     scraped_count = 0
 
     for cid in content_ids:
@@ -769,7 +769,18 @@ def page_generate_mediafire():
         mf_downloads = [dl for dl in downloads if dl.url and 'mediafire' in dl.url.lower()]
 
         if not mf_downloads:
-            skipped += 1
+            # Recopilar servidores disponibles para mostrar al usuario
+            available_servers = list(set(
+                extractServerNamePy(dl.url) for dl in downloads if dl.url
+            ))
+            skipped.append({
+                'title': clean_title,
+                'poster': content.poster,
+                'content_id': content.id,
+                'year': year,
+                'servers': available_servers,
+                'total_downloads': len(downloads),
+            })
             continue
 
         for dl in mf_downloads:
@@ -785,8 +796,9 @@ def page_generate_mediafire():
         'total': len(all_results),
         'errors': errors,
         'skipped': skipped,
+        'skipped_count': len(skipped),
         'scraped': scraped_count,
-        'processed': len(content_ids) - len(errors) - skipped,
+        'processed': len(content_ids) - len(errors) - len(skipped),
     })
 
 
