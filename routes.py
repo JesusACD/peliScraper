@@ -297,24 +297,8 @@ def tmdb_search():
     if not title:
         return jsonify({'error': True, 'message': 'Título requerido'}), 400
 
-    # Pool de API keys de TMDB (rotación para evitar límites)
-    TMDB_API_KEYS = [
-        '10923b261ba94d897ac6b81148314a3f',
-        'b573d051ec65413c949e68169923f7ff',
-        'da40aaeca884d8c9a9a4c088917c474c',
-        '4e44d9029b1270a757cddc766a1bcb63',
-        '39151834c95219c3cae772b4465079d7',
-        '6bca0b74270a3299673d934c1bb11b4d',
-        '902ddd650dd51f569c2ef95468612ad1',
-        '4c7ff8e6151131469216f007e4be3b3d',
-        '21e3f055fa996f78a2886737bb6e7957',
-        '98325a9d3ed3ec225e41ccc4d360c817',
-        '3fd2be6f0c70a2a598f084ddfb75487c',
-        '9780d3ceee590a40bd3446da3f81171d',
-        '04c35731a5ee918f014970082a0088b1',
-        '516adf1e1567058f8ecbf30bf2eb9378',
-        '9b702a6b89b0278738dab62417267c49',
-    ]
+    # Pool de API keys de TMDB (compartido desde scraper)
+    from scraper import TMDB_API_KEYS
 
     search_type = 'movie' if content_type in ('movies', 'movie') else 'tv'
     url = f'https://api.themoviedb.org/3/search/{search_type}'
@@ -470,20 +454,8 @@ def bulk_generate_commands():
     if not content_ids:
         return jsonify({'error': True, 'message': 'No se seleccionaron contenidos'}), 400
 
-    # Pool de API keys
-    TMDB_API_KEYS = [
-        '10923b261ba94d897ac6b81148314a3f',
-        'b573d051ec65413c949e68169923f7ff',
-        'da40aaeca884d8c9a9a4c088917c474c',
-        '4e44d9029b1270a757cddc766a1bcb63',
-        '39151834c95219c3cae772b4465079d7',
-        '6bca0b74270a3299673d934c1bb11b4d',
-        '902ddd650dd51f569c2ef95468612ad1',
-        '4c7ff8e6151131469216f007e4be3b3d',
-        '21e3f055fa996f78a2886737bb6e7957',
-        '98325a9d3ed3ec225e41ccc4d360c817',
-        '3fd2be6f0c70a2a598f084ddfb75487c',
-    ]
+    # Pool de API keys (compartido desde scraper)
+    from scraper import TMDB_API_KEYS
 
     all_results = []
     errors = []
@@ -652,20 +624,8 @@ def page_generate_mediafire():
     if not content_ids:
         return jsonify({'error': True, 'message': 'No se enviaron IDs de contenido'}), 400
 
-    # Pool de API keys para TMDB
-    TMDB_API_KEYS = [
-        '10923b261ba94d897ac6b81148314a3f',
-        'b573d051ec65413c949e68169923f7ff',
-        'da40aaeca884d8c9a9a4c088917c474c',
-        '4e44d9029b1270a757cddc766a1bcb63',
-        '39151834c95219c3cae772b4465079d7',
-        '6bca0b74270a3299673d934c1bb11b4d',
-        '902ddd650dd51f569c2ef95468612ad1',
-        '4c7ff8e6151131469216f007e4be3b3d',
-        '21e3f055fa996f78a2886737bb6e7957',
-        '98325a9d3ed3ec225e41ccc4d360c817',
-        '3fd2be6f0c70a2a598f084ddfb75487c',
-    ]
+    # Pool de API keys para TMDB (compartido desde scraper)
+    from scraper import TMDB_API_KEYS
 
     all_results = []
     errors = []

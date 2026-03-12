@@ -2,6 +2,8 @@
 # Consume la API REST interna del sitio para extraer datos de películas, series y animes
 import requests
 import json
+import re
+import random
 import time
 import threading
 import logging
@@ -10,6 +12,25 @@ from urllib.parse import urljoin
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Pool de API keys de TMDB (rotación para evitar límites)
+TMDB_API_KEYS = [
+    '10923b261ba94d897ac6b81148314a3f',
+    'b573d051ec65413c949e68169923f7ff',
+    'da40aaeca884d8c9a9a4c088917c474c',
+    '4e44d9029b1270a757cddc766a1bcb63',
+    '39151834c95219c3cae772b4465079d7',
+    '6bca0b74270a3299673d934c1bb11b4d',
+    '902ddd650dd51f569c2ef95468612ad1',
+    '4c7ff8e6151131469216f007e4be3b3d',
+    '21e3f055fa996f78a2886737bb6e7957',
+    '98325a9d3ed3ec225e41ccc4d360c817',
+    '3fd2be6f0c70a2a598f084ddfb75487c',
+    '9780d3ceee590a40bd3446da3f81171d',
+    '04c35731a5ee918f014970082a0088b1',
+    '516adf1e1567058f8ecbf30bf2eb9378',
+    '9b702a6b89b0278738dab62417267c49',
+]
 
 # URL base de la API
 BASE_URL = 'https://la.movie'
@@ -59,6 +80,8 @@ class LaMovieScraper:
         # Controles de velocidad
         self.delay = 0.5  # Segundos entre peticiones
         self.max_retries = 3
+        # Sesión HTTP separada para TMDB
+        self._tmdb_session = requests.Session()
 
     def stop(self):
         """Detiene el scraping actual."""
@@ -94,6 +117,81 @@ class LaMovieScraper:
         """Obtiene enlaces de reproducción y descarga."""
         url = f'{API_URL}/player'
         return self._request(url, params={'postId': post_id})
+
+    def _resolve_tmdb_id(self, title, year, content_type):
+        """Resuelve el TMDB ID de un contenido buscando por título y año."""
+        clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', title).strip()
+        search_type = 'movie' if content_type in ('movies',) else 'tv'
+
+        # Intentar con varias keys aleatorias
+        keys = list(TMDB_API_KEYS)
+        random.shuffle(keys)
+
+        for api_key in keys[:3]:
+            params = {
+                'api_key': api_key,
+                'query': clean_title,
+                'language': 'es-MX',
+            }
+            if year:
+                params['year' if search_type == 'movie' else 'first_air_date_year'] = year
+
+            try:
+                resp = self._tmdb_session.get(
+                    f'https://api.themoviedb.org/3/search/{search_type}',
+                    params=params, timeout=10
+                )
+                if resp.status_code == 200:
+                    results = resp.json().get('results', [])
+                    if results:
+                        return results[0]['id']
+                elif resp.status_code == 401:
+                    continue  # Key inválida, probar otra
+                time.sleep(0.3)  # Rate limiting para TMDB
+            except Exception as e:
+                logger.warning(f'Error buscando TMDB para "{clean_title}": {e}')
+                continue
+
+        return None
+
+    def _save_downloads(self, content, player_data):
+        """Guarda descargas y embeds del player_data en la BD."""
+        from models import db, DownloadLink, EmbedLink
+
+        pdata = player_data.get('data', {})
+
+        # Limpiar descargas y embeds existentes
+        DownloadLink.query.filter_by(content_id=content.id).delete()
+        EmbedLink.query.filter_by(content_id=content.id).delete()
+
+        # Guardar descargas
+        for dl in pdata.get('downloads', []):
+            download = DownloadLink(
+                content_id=content.id,
+                url=dl.get('url', ''),
+                server=dl.get('server', ''),
+                quality=dl.get('quality', ''),
+                language=dl.get('lang', ''),
+                size=dl.get('size'),
+                subtitle=dl.get('subtitle', 0),
+                format=dl.get('format'),
+                resolution=dl.get('resolution'),
+            )
+            db.session.add(download)
+
+        # Guardar embeds
+        for em in pdata.get('embeds', []):
+            embed = EmbedLink(
+                content_id=content.id,
+                url=em.get('url', ''),
+                server=em.get('server', ''),
+                quality=em.get('quality', ''),
+                language=em.get('lang', ''),
+                subtitle=em.get('subtitle', 0),
+            )
+            db.session.add(embed)
+
+        content.downloads_scraped = True
 
     def fetch_episodes(self, post_id, season=1):
         """Obtiene episodios de una serie/anime."""
@@ -164,9 +262,10 @@ class LaMovieScraper:
     def scrape_listing(self, content_type, start_page=1, end_page=None, job_id=None):
         """
         Scrapea el listado completo de un tipo de contenido con paginación.
+        También obtiene descargas y resuelve TMDB IDs para cada item.
         Ejecuta en un hilo separado.
         """
-        from models import db, Content, ScrapeJob
+        from models import db, Content, DownloadLink, EmbedLink, ScrapeJob
 
         self._stop_event.clear()
         self._current_job_id = job_id
@@ -215,6 +314,9 @@ class LaMovieScraper:
                     posts = data.get('data', {}).get('posts', [])
 
                     for post in posts:
+                        if self.is_stopped():
+                            break
+
                         try:
                             parsed = self._parse_content_item(post)
 
@@ -227,9 +329,36 @@ class LaMovieScraper:
                                 for key, value in parsed.items():
                                     setattr(existing, key, value)
                                 existing.scraped_at = datetime.utcnow()
+                                content_obj = existing
                             else:
-                                content = Content(**parsed)
-                                db.session.add(content)
+                                content_obj = Content(**parsed)
+                                db.session.add(content_obj)
+                                db.session.flush()  # Obtener ID para relaciones
+
+                            # ── Obtener descargas si no se han scrapeado ──
+                            if not content_obj.downloads_scraped:
+                                try:
+                                    player_data = self.fetch_player(parsed['external_id'])
+                                    time.sleep(self.delay * 0.5)
+
+                                    if player_data and not player_data.get('error'):
+                                        self._save_downloads(content_obj, player_data)
+                                        logger.info(f'  📥 Descargas obtenidas: {parsed["title"]}')
+                                except Exception as dl_err:
+                                    error_messages.append(f'Descargas {parsed["title"]}: {str(dl_err)[:60]}')
+
+                            # ── Resolver TMDB ID si no tiene ──
+                            if not content_obj.tmdb_id:
+                                try:
+                                    year = parsed.get('year', '')
+                                    tmdb_id = self._resolve_tmdb_id(
+                                        parsed['title'], year, parsed['content_type']
+                                    )
+                                    if tmdb_id:
+                                        content_obj.tmdb_id = tmdb_id
+                                        logger.info(f'  🎬 TMDB ID resuelto: {parsed["title"]} → {tmdb_id}')
+                                except Exception as tmdb_err:
+                                    error_messages.append(f'TMDB {parsed["title"]}: {str(tmdb_err)[:60]}')
 
                             items_scraped += 1
                         except Exception as e:
@@ -263,7 +392,7 @@ class LaMovieScraper:
         Scrapea los enlaces de descarga para el contenido especificado.
         Si no se especifican IDs, scrapea todos los que no tengan descargas.
         """
-        from models import db, Content, DownloadLink, EmbedLink, ScrapeJob
+        from models import db, Content, ScrapeJob
 
         self._stop_event.clear()
 
@@ -301,42 +430,8 @@ class LaMovieScraper:
                         error_messages.append(f'{content.title}: Error al obtener player')
                         continue
 
-                    data = player_data.get('data', {})
-
-                    # Limpiar descargas y embeds existentes
-                    DownloadLink.query.filter_by(content_id=content.id).delete()
-                    EmbedLink.query.filter_by(content_id=content.id).delete()
-
-                    # Guardar descargas
-                    downloads = data.get('downloads', [])
-                    for dl in downloads:
-                        download = DownloadLink(
-                            content_id=content.id,
-                            url=dl.get('url', ''),
-                            server=dl.get('server', ''),
-                            quality=dl.get('quality', ''),
-                            language=dl.get('lang', ''),
-                            size=dl.get('size'),
-                            subtitle=dl.get('subtitle', 0),
-                            format=dl.get('format'),
-                            resolution=dl.get('resolution'),
-                        )
-                        db.session.add(download)
-
-                    # Guardar embeds
-                    embeds = data.get('embeds', [])
-                    for em in embeds:
-                        embed = EmbedLink(
-                            content_id=content.id,
-                            url=em.get('url', ''),
-                            server=em.get('server', ''),
-                            quality=em.get('quality', ''),
-                            language=em.get('lang', ''),
-                            subtitle=em.get('subtitle', 0),
-                        )
-                        db.session.add(embed)
-
-                    content.downloads_scraped = True
+                    # Usar helper compartido para guardar descargas y embeds
+                    self._save_downloads(content, player_data)
                     items_scraped += 1
                     db.session.commit()
 
@@ -345,7 +440,8 @@ class LaMovieScraper:
                                      items_scraped=items_scraped,
                                      errors=errors)
 
-                    logger.info(f'[downloads] {i + 1}/{total} - {content.title}: {len(downloads)} descargas')
+                    dl_count = len(player_data.get('data', {}).get('downloads', []))
+                    logger.info(f'[downloads] {i + 1}/{total} - {content.title}: {dl_count} descargas')
 
                 except Exception as e:
                     errors += 1
