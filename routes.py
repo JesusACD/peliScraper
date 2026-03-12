@@ -432,9 +432,10 @@ def generate_command(content_id):
         if password:
             cmd_parts.append(f'-p "{password}"')
 
-        # Agregar servidores de upload
+        # Agregar servidores de upload (mediafire usa --upload-rar-encoded)
         for server in upload_servers:
-            cmd_parts.append(f'--upload {server}')
+            flag = '--upload-rar-encoded' if server.lower() == 'mediafire' else '--upload'
+            cmd_parts.append(f'{flag} {server}')
 
         commands.append({
             'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
@@ -566,7 +567,8 @@ def bulk_generate_commands():
                 cmd_parts.append(f'-p "{password}"')
 
             for server in upload_servers:
-                cmd_parts.append(f'--upload {server}')
+                flag = '--upload-rar-encoded' if server.lower() == 'mediafire' else '--upload'
+                cmd_parts.append(f'{flag} {server}')
 
             all_results.append({
                 'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
@@ -612,9 +614,10 @@ def _build_command(dl, tmdb_id, clean_title, year, password='', upload_servers=N
     if password:
         cmd_parts.append(f'-p "{password}"')
 
-    # Agregar servidores de upload
+    # Agregar servidores de upload (mediafire usa --upload-rar-encoded)
     for server in (upload_servers or []):
-        cmd_parts.append(f'--upload {server}')
+        flag = '--upload-rar-encoded' if server.lower() == 'mediafire' else '--upload'
+        cmd_parts.append(f'{flag} {server}')
 
     return {
         'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',

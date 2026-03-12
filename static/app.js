@@ -911,20 +911,69 @@ async function generatePageMediafire(contentType) {
         return;
     }
 
-    // Mostrar overlay con loader
+    // Mostrar overlay con panel de configuración de servidores
     const overlay = document.getElementById('bulkResultsOverlay');
     const content = document.getElementById('bulkResultsContent');
     overlay.classList.add('active');
+
+    // Panel de configuración: selección de servidores de upload
+    let configHtml = `
+        <div style="margin-bottom:20px;padding:16px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">
+            <p style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px">⚙️ Configuración de servidores de upload</p>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Selecciona los servidores que se incluirán en cada comando generado.</p>
+            <div class="upload-servers-grid" id="mfUploadServers">
+                ${UPLOAD_SERVERS.map(s => `
+                    <span class="upload-server-tag active" data-server="${s}" onclick="toggleUploadServer(this)">${s}</span>
+                `).join('')}
+            </div>
+            <div style="margin-top:8px;display:flex;gap:8px">
+                <button class="btn btn-outline btn-sm" onclick="document.querySelectorAll('#mfUploadServers .upload-server-tag').forEach(el => el.classList.add('active'))">Seleccionar todos</button>
+                <button class="btn btn-outline btn-sm" onclick="document.querySelectorAll('#mfUploadServers .upload-server-tag').forEach(el => el.classList.remove('active'))">Deseleccionar</button>
+            </div>
+        </div>
+        <div style="margin-bottom:16px;padding:12px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">
+            <div style="display:flex;align-items:center;gap:10px">
+                <div class="field" style="flex:1">
+                    <label style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Contraseña (archivo)</label>
+                    <input type="text" id="mfPassword" value="cc" placeholder="ej: cc" style="width:100%">
+                </div>
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="executePageMediafire('${contentType}')">
+            🚀 Generar Comandos MediaFire (${contentIds.length} títulos)
+        </button>
+    `;
+
+    content.innerHTML = configHtml;
+}
+
+// Ejecuta la generación de comandos MediaFire con los servidores seleccionados
+async function executePageMediafire(contentType) {
+    const suffix = TYPE_TO_DOM[contentType];
+    if (!suffix) return;
+
+    const grid = document.getElementById(`grid${suffix}`);
+    if (!grid) return;
+
+    const cards = grid.querySelectorAll('.content-card[data-id]');
+    const contentIds = Array.from(cards).map(c => parseInt(c.dataset.id)).filter(id => id);
+
+    // Obtener servidores seleccionados del panel de configuración
+    const uploadServers = [];
+    document.querySelectorAll('#mfUploadServers .upload-server-tag.active').forEach(el => {
+        uploadServers.push(el.dataset.server);
+    });
+
+    const password = document.getElementById('mfPassword')?.value || 'cc';
+
+    // Mostrar loader
+    const content = document.getElementById('bulkResultsContent');
     content.innerHTML = `
         <div class="loader active"><div class="spinner"></div>
             Generando comandos MediaFire para ${contentIds.length} título(s)...<br>
             <small style="color:var(--text-muted)">Scrapeando descargas, filtrando MediaFire y resolviendo TMDB IDs...</small>
         </div>
     `;
-
-    // Servidores de upload y contraseña por defecto
-    const uploadServers = UPLOAD_SERVERS;
-    const password = 'cc';
 
     const result = await api('/api/content/page-generate-mediafire', {
         method: 'POST',
@@ -947,6 +996,11 @@ async function generatePageMediafire(contentType) {
     // Resumen
     html += `<div style="margin-bottom:16px;padding:12px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">`;
     html += `<p style="font-size:13px"><strong>🗂️ MediaFire · ${result.processed} título(s) con enlaces</strong> · ${result.total} comando(s) generado(s)</p>`;
+    if (uploadServers.length > 0) {
+        html += `<p style="font-size:12px;color:var(--text-secondary);margin-top:4px">🖥️ Servidores: ${uploadServers.join(', ')}</p>`;
+    } else {
+        html += `<p style="font-size:12px;color:var(--warning, #f59e0b);margin-top:4px">⚠️ Sin servidores de upload seleccionados</p>`;
+    }
     if (result.scraped > 0) {
         html += `<p style="font-size:12px;color:var(--accent);margin-top:4px">📥 ${result.scraped} título(s) scrapeados automáticamente desde la.movie</p>`;
     }
