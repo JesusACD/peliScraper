@@ -111,7 +111,9 @@ class LaMovieScraper:
     def fetch_listing(self, content_type, page=1):
         """Obtiene una página del listado de contenido."""
         url = f'{API_URL}/listing/{content_type}'
-        return self._request(url, params={'page': page})
+        # El parámetro postType es obligatorio para que la API filtre correctamente
+        # Sin él, todos los endpoints devuelven películas por defecto
+        return self._request(url, params={'page': page, 'postType': content_type})
 
     def fetch_player(self, post_id):
         """Obtiene enlaces de reproducción y descarga."""
@@ -214,9 +216,8 @@ class LaMovieScraper:
             return f'{IMAGE_BASE}{path}'
         return f'{IMAGE_BASE}/{path}'
 
-    def _parse_content_item(self, item, content_type_override=None):
-        """Parsea un item del listado a un diccionario normalizado.
-        content_type_override: tipo de contenido forzado (la API devuelve 'movies' para todos)."""
+    def _parse_content_item(self, item):
+        """Parsea un item del listado a un diccionario normalizado."""
         # Resolver taxonomías a nombres legibles
         genres = self._resolve_taxonomies(item.get('genres', []), GENRES_MAP)
         quality = self._resolve_taxonomies(item.get('quality', []), QUALITY_MAP)
@@ -239,7 +240,7 @@ class LaMovieScraper:
             'original_title': item.get('original_title', ''),
             'slug': item.get('slug', ''),
             'overview': item.get('overview', ''),
-            'content_type': content_type_override or item.get('type', 'movies'),
+            'content_type': item.get('type', 'movies'),
             'poster': self._build_image_url(images.get('poster')),
             'backdrop': self._build_image_url(images.get('backdrop')),
             'logo': self._build_image_url(images.get('logo')),
@@ -260,13 +261,97 @@ class LaMovieScraper:
             'last_update': item.get('last_update', ''),
         }
 
+    def _scrape_content_episodes(self, content_obj, db, Episode, EpisodeDownload):
+        """Scrapea episodios y sus descargas para una serie/anime individual.
+        
+        Retorna (episodes_found, downloads_found) como tupla.
+        """
+        episodes_found = 0
+        downloads_found = 0
+
+        for season_num in range(1, 21):
+            if self.is_stopped():
+                break
+
+            ep_data = self.fetch_episodes(content_obj.external_id, season_num)
+            time.sleep(self.delay * 0.5)
+
+            if not ep_data or not ep_data.get('data'):
+                break
+
+            # La respuesta tiene los episodios en data.posts
+            episodes_list = ep_data.get('data', {})
+            if isinstance(episodes_list, dict):
+                episodes_list = episodes_list.get('posts', [])
+            if not episodes_list:
+                break
+
+            for ep in episodes_list:
+                if self.is_stopped():
+                    break
+
+                ep_ext_id = ep.get('_id')
+                ep_number = ep.get('episode_number', ep.get('number'))
+
+                # Verificar si ya existe
+                existing = Episode.query.filter_by(
+                    content_id=content_obj.id,
+                    season=season_num,
+                    episode_number=ep_number
+                ).first()
+
+                if existing:
+                    episode_obj = existing
+                    if not existing.external_id and ep_ext_id:
+                        existing.external_id = ep_ext_id
+                else:
+                    episode_obj = Episode(
+                        content_id=content_obj.id,
+                        external_id=ep_ext_id,
+                        title=ep.get('title', ''),
+                        slug=ep.get('slug', ''),
+                        season=season_num,
+                        episode_number=ep_number,
+                        poster=ep.get('still_path', ''),
+                    )
+                    db.session.add(episode_obj)
+                    db.session.flush()
+
+                episodes_found += 1
+
+                # Obtener descargas del episodio si no las tiene
+                if ep_ext_id and not episode_obj.downloads:
+                    try:
+                        player_data = self.fetch_player(ep_ext_id)
+                        time.sleep(self.delay * 0.5)
+
+                        if player_data and not player_data.get('error'):
+                            pdata = player_data.get('data', {})
+                            for dl in pdata.get('downloads', []):
+                                ep_download = EpisodeDownload(
+                                    episode_id=episode_obj.id,
+                                    url=dl.get('url', ''),
+                                    server=dl.get('server', ''),
+                                    quality=dl.get('quality', ''),
+                                    language=dl.get('lang', ''),
+                                    size=dl.get('size'),
+                                    subtitle=dl.get('subtitle', 0),
+                                )
+                                db.session.add(ep_download)
+                                downloads_found += 1
+                    except Exception as dl_err:
+                        logger.warning(f'Error descargas ep {ep.get("title", ep_ext_id)}: {dl_err}')
+
+        return episodes_found, downloads_found
+
     def scrape_listing(self, content_type, start_page=1, end_page=None, job_id=None):
         """
         Scrapea el listado completo de un tipo de contenido con paginación.
         También obtiene descargas y resuelve TMDB IDs para cada item.
+        Para series/animes, también scrapea episodios y sus descargas.
         Ejecuta en un hilo separado.
         """
-        from models import db, Content, DownloadLink, EmbedLink, ScrapeJob
+        from models import db, Content, DownloadLink, EmbedLink, ScrapeJob, Episode, EpisodeDownload
 
         self._stop_event.clear()
         self._current_job_id = job_id
@@ -319,7 +404,7 @@ class LaMovieScraper:
                             break
 
                         try:
-                            parsed = self._parse_content_item(post, content_type_override=content_type)
+                            parsed = self._parse_content_item(post)
 
                             # Verificar si ya existe y actualizar o crear
                             existing = Content.query.filter_by(
@@ -336,17 +421,30 @@ class LaMovieScraper:
                                 db.session.add(content_obj)
                                 db.session.flush()  # Obtener ID para relaciones
 
-                            # ── Obtener descargas si no se han scrapeado ──
+                            # ── Obtener descargas ──
                             if not content_obj.downloads_scraped:
-                                try:
-                                    player_data = self.fetch_player(parsed['external_id'])
-                                    time.sleep(self.delay * 0.5)
+                                if content_type == 'movies':
+                                    # Películas: descargas a nivel de post
+                                    try:
+                                        player_data = self.fetch_player(parsed['external_id'])
+                                        time.sleep(self.delay * 0.5)
 
-                                    if player_data and not player_data.get('error'):
-                                        self._save_downloads(content_obj, player_data)
-                                        logger.info(f'  📥 Descargas obtenidas: {parsed["title"]}')
-                                except Exception as dl_err:
-                                    error_messages.append(f'Descargas {parsed["title"]}: {str(dl_err)[:60]}')
+                                        if player_data and not player_data.get('error'):
+                                            self._save_downloads(content_obj, player_data)
+                                            logger.info(f'  📥 Descargas obtenidas: {parsed["title"]}')
+                                    except Exception as dl_err:
+                                        error_messages.append(f'Descargas {parsed["title"]}: {str(dl_err)[:60]}')
+                                else:
+                                    # Series/Animes: descargas a nivel de episodio
+                                    try:
+                                        ep_count, dl_count = self._scrape_content_episodes(
+                                            content_obj, db, Episode, EpisodeDownload
+                                        )
+                                        if ep_count > 0:
+                                            content_obj.downloads_scraped = True
+                                            logger.info(f'  📺 {ep_count} episodios, {dl_count} descargas: {parsed["title"]}')
+                                    except Exception as ep_err:
+                                        error_messages.append(f'Episodios {parsed["title"]}: {str(ep_err)[:60]}')
 
                             # ── Resolver TMDB ID si no tiene ──
                             if not content_obj.tmdb_id:
@@ -456,7 +554,7 @@ class LaMovieScraper:
                              error_log='\n'.join(error_messages[-50:]) if error_messages else None)
 
     def scrape_episodes(self, content_ids=None, job_id=None):
-        """Scrapea episodios de series y animes."""
+        """Scrapea episodios de series y animes, incluyendo sus enlaces de descarga."""
         from models import db, Content, Episode, EpisodeDownload, ScrapeJob
 
         self._stop_event.clear()
@@ -473,44 +571,100 @@ class LaMovieScraper:
 
             items_scraped = 0
             errors = 0
+            error_messages = []
 
             for i, content in enumerate(contents):
                 if self.is_stopped():
-                    self._update_job(job_id, 'stopped', current_page=i, items_scraped=items_scraped, errors=errors)
+                    self._update_job(job_id, 'stopped', current_page=i, items_scraped=items_scraped, errors=errors,
+                                     error_log='\n'.join(error_messages[-50:]) if error_messages else None)
                     return
 
                 try:
+                    episodes_found = 0
                     # Intentar obtener hasta 20 temporadas
                     for season_num in range(1, 21):
+                        if self.is_stopped():
+                            break
+
                         ep_data = self.fetch_episodes(content.external_id, season_num)
                         time.sleep(self.delay * 0.5)
 
                         if not ep_data or not ep_data.get('data'):
                             break
 
-                        episodes_list = ep_data.get('data', [])
+                        # La respuesta tiene los episodios en data.posts
+                        episodes_list = ep_data.get('data', {})
+                        if isinstance(episodes_list, dict):
+                            episodes_list = episodes_list.get('posts', [])
                         if not episodes_list:
                             break
 
                         for ep in episodes_list:
+                            if self.is_stopped():
+                                break
+
+                            ep_ext_id = ep.get('_id')
+                            ep_number = ep.get('episode_number', ep.get('number'))
+
                             # Verificar si ya existe
                             existing = Episode.query.filter_by(
                                 content_id=content.id,
                                 season=season_num,
-                                episode_number=ep.get('number', ep.get('episode_number'))
+                                episode_number=ep_number
                             ).first()
 
-                            if not existing:
-                                episode = Episode(
+                            if existing:
+                                episode_obj = existing
+                                # Actualizar external_id si no lo tenía
+                                if not existing.external_id and ep_ext_id:
+                                    existing.external_id = ep_ext_id
+                            else:
+                                episode_obj = Episode(
                                     content_id=content.id,
-                                    external_id=ep.get('_id'),
+                                    external_id=ep_ext_id,
                                     title=ep.get('title', ''),
                                     slug=ep.get('slug', ''),
                                     season=season_num,
-                                    episode_number=ep.get('number', ep.get('episode_number')),
-                                    poster=ep.get('poster', ''),
+                                    episode_number=ep_number,
+                                    poster=ep.get('still_path', ''),
                                 )
-                                db.session.add(episode)
+                                db.session.add(episode_obj)
+                                db.session.flush()  # Obtener ID para relaciones
+
+                            episodes_found += 1
+
+                            # ── Obtener descargas del episodio ──
+                            # Las descargas de series están a nivel de episodio
+                            if ep_ext_id and not episode_obj.downloads:
+                                try:
+                                    player_data = self.fetch_player(ep_ext_id)
+                                    time.sleep(self.delay * 0.5)
+
+                                    if player_data and not player_data.get('error'):
+                                        pdata = player_data.get('data', {})
+                                        for dl in pdata.get('downloads', []):
+                                            ep_download = EpisodeDownload(
+                                                episode_id=episode_obj.id,
+                                                url=dl.get('url', ''),
+                                                server=dl.get('server', ''),
+                                                quality=dl.get('quality', ''),
+                                                language=dl.get('lang', ''),
+                                                size=dl.get('size'),
+                                                subtitle=dl.get('subtitle', 0),
+                                            )
+                                            db.session.add(ep_download)
+
+                                        dl_count = len(pdata.get('downloads', []))
+                                        if dl_count > 0:
+                                            logger.info(f'  📥 {dl_count} descargas: {ep.get("title", "")}')
+                                except Exception as dl_err:
+                                    error_messages.append(
+                                        f'Descargas ep {ep.get("title", ep_ext_id)}: {str(dl_err)[:60]}'
+                                    )
+
+                    # Marcar la serie como scrapeada si encontramos episodios
+                    if episodes_found > 0:
+                        content.downloads_scraped = True
 
                     items_scraped += 1
                     db.session.commit()
@@ -520,14 +674,18 @@ class LaMovieScraper:
                                      items_scraped=items_scraped,
                                      errors=errors)
 
+                    logger.info(f'[episodes] {i + 1}/{total} - {content.title}: {episodes_found} episodios')
+
                 except Exception as e:
                     errors += 1
+                    error_messages.append(f'{content.title}: {str(e)}')
                     db.session.rollback()
 
             self._update_job(job_id, 'completed',
                              current_page=total,
                              items_scraped=items_scraped,
-                             errors=errors)
+                             errors=errors,
+                             error_log='\n'.join(error_messages[-50:]) if error_messages else None)
 
     def _update_job(self, job_id, status, **kwargs):
         """Actualiza el estado de un trabajo de scraping."""

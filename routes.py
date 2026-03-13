@@ -367,7 +367,7 @@ def set_tmdb_id(content_id):
 
 @api.route('/api/content/<int:content_id>/generate-command', methods=['POST'])
 def generate_command(content_id):
-    """Genera comandos CLI para procesar descargas."""
+    """Genera comandos CLI para procesar descargas (películas y series)."""
     content = Content.query.get_or_404(content_id)
     data = request.get_json() or {}
 
@@ -387,47 +387,89 @@ def generate_command(content_id):
     import re
     clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
 
-    # Generar un comando por cada enlace de descarga
     commands = []
-    downloads = DownloadLink.query.filter_by(content_id=content.id).all()
 
-    for dl in downloads:
-        # Determinar calidad limpia
-        quality = dl.quality or ''
-        quality_clean = quality.replace('Dual ', '').replace('Full HD', '1080p').replace('HD', '720p')
-        if not quality_clean:
-            quality_clean = '1080p'
+    if content.content_type in ('tvshows', 'animes'):
+        # Series/Animes: generar un comando process-series por cada descarga de episodio
+        episodes = Episode.query.filter_by(content_id=content.id).order_by(
+            Episode.season, Episode.episode_number
+        ).all()
 
-        # Determinar idioma limpio
-        lang = dl.language or ''
-        lang_parts = [l.strip() for l in lang.split('/')]
-        lang_clean = lang_parts[0] if lang_parts else 'Latino'
+        for ep in episodes:
+            ep_downloads = EpisodeDownload.query.filter_by(episode_id=ep.id).all()
+            for dl in ep_downloads:
+                quality = dl.quality or ''
+                quality_clean = quality.replace('Dual ', '').replace('Full HD', '1080p').replace('HD', '720p')
+                if not quality_clean:
+                    quality_clean = '1080p'
 
-        # Construir comando base
-        cmd_parts = ['python main.py process']
-        cmd_parts.append(f'"{dl.url}"')
-        cmd_parts.append(f'-i {tmdb_id}')
-        cmd_parts.append(f'-t "{clean_title}"')
-        if year:
-            cmd_parts.append(f'-y {year}')
-        cmd_parts.append(f'-Q {quality_clean}')
-        cmd_parts.append(f'-l {lang_clean}')
+                lang = dl.language or ''
+                lang_parts = [l.strip() for l in lang.split('/')]
+                lang_clean = lang_parts[0] if lang_parts else 'Latino'
 
-        if password:
-            cmd_parts.append(f'-p "{password}"')
+                cmd_parts = ['python main.py process-series']
+                cmd_parts.append(f'"{dl.url}"')
+                cmd_parts.append(f'-i {tmdb_id}')
+                cmd_parts.append(f'-t "{clean_title}"')
+                cmd_parts.append(f'-s {ep.season or 1}')
+                cmd_parts.append(f'-e {ep.episode_number or 1}')
+                cmd_parts.append(f'-Q {quality_clean}')
+                cmd_parts.append(f'-l {lang_clean}')
 
-        # Agregar servidores de upload (mediafire usa --upload-rar-encoded)
-        for server in upload_servers:
-            flag = '--upload-rar-encoded' if server.lower() == 'mediafire' else '--upload'
-            cmd_parts.append(f'{flag} {server}')
+                if password:
+                    cmd_parts.append(f'-p "{password}"')
 
-        commands.append({
-            'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
-            'server': dl.server,
-            'quality': dl.quality,
-            'language': dl.language,
-            'url': dl.url,
-        })
+                for server in upload_servers:
+                    flag = '--upload-rar-encoded' if server.lower() == 'mediafire' else '--upload'
+                    cmd_parts.append(f'{flag} {server}')
+
+                commands.append({
+                    'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
+                    'server': dl.server,
+                    'quality': dl.quality,
+                    'language': dl.language,
+                    'url': dl.url,
+                    'season': ep.season,
+                    'episode': ep.episode_number,
+                    'episode_title': ep.title,
+                })
+    else:
+        # Películas: generar un comando process por cada descarga
+        downloads = DownloadLink.query.filter_by(content_id=content.id).all()
+
+        for dl in downloads:
+            quality = dl.quality or ''
+            quality_clean = quality.replace('Dual ', '').replace('Full HD', '1080p').replace('HD', '720p')
+            if not quality_clean:
+                quality_clean = '1080p'
+
+            lang = dl.language or ''
+            lang_parts = [l.strip() for l in lang.split('/')]
+            lang_clean = lang_parts[0] if lang_parts else 'Latino'
+
+            cmd_parts = ['python main.py process']
+            cmd_parts.append(f'"{dl.url}"')
+            cmd_parts.append(f'-i {tmdb_id}')
+            cmd_parts.append(f'-t "{clean_title}"')
+            if year:
+                cmd_parts.append(f'-y {year}')
+            cmd_parts.append(f'-Q {quality_clean}')
+            cmd_parts.append(f'-l {lang_clean}')
+
+            if password:
+                cmd_parts.append(f'-p "{password}"')
+
+            for server in upload_servers:
+                flag = '--upload-rar-encoded' if server.lower() == 'mediafire' else '--upload'
+                cmd_parts.append(f'{flag} {server}')
+
+            commands.append({
+                'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
+                'server': dl.server,
+                'quality': dl.quality,
+                'language': dl.language,
+                'url': dl.url,
+            })
 
     return jsonify({
         'error': False,

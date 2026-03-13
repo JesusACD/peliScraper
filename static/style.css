@@ -1567,3 +1567,128 @@ input[type="number"]:focus {
 }
 
 .bulk-results-panel .close-bulk:hover { color: var(--text-primary); }
+
+/* ─── EPISODIOS Y DESCARGAS ─────────────────────────── */
+.season-details {
+  margin-bottom: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.season-summary {
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  user-select: none;
+  list-style: none;
+  transition: var(--transition);
+}
+
+.season-summary::-webkit-details-marker { display: none; }
+
+.season-summary::before {
+  content: '▸';
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+
+.season-details[open] .season-summary::before {
+  transform: rotate(90deg);
+}
+
+.season-summary:hover {
+  background: var(--bg-card-hover);
+}
+
+.episodes-list {
+  padding: 8px;
+}
+
+.episode-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  transition: var(--transition);
+}
+
+.episode-item:last-child {
+  border-bottom: none;
+}
+
+.episode-item:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.episode-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.episode-number {
+  background: var(--accent-glow);
+  color: var(--accent-light);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.episode-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.episode-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 42px;
+}
+
+.ep-dl-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: var(--transition);
+}
+
+.ep-dl-link:hover {
+  border-color: var(--accent);
+  color: var(--accent-light);
+  background: var(--accent-glow);
+}
+
+.ep-dl-link.ep-dl-mf {
+  border-color: rgba(74, 222, 128, 0.3);
+}
+
+.ep-dl-link.ep-dl-mf:hover {
+  border-color: #4ade80;
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.ep-dl-quality {
+  font-size: 10px;
+  color: var(--text-muted);
+}

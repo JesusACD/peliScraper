@@ -335,6 +335,10 @@ async function openDetail(contentId) {
     // Body del modal
     let bodyHtml = '';
 
+    // Determinar si tiene descargas (películas: content downloads, series: episode downloads)
+    const hasEpisodeDownloads = item.episodes && item.episodes.some(ep => ep.downloads && ep.downloads.length > 0);
+    const hasDownloads = item.downloads.length > 0 || hasEpisodeDownloads;
+
     // Meta tags
     bodyHtml += '<div class="modal-meta">';
     if (item.rating) bodyHtml += `<span class="meta-tag rating">⭐ ${item.rating}</span>`;
@@ -451,7 +455,7 @@ async function openDetail(contentId) {
                     </div>
                 </div>
 
-                <button class="btn btn-primary" onclick="generateCommands(${item.id})" ${item.downloads.length === 0 ? 'disabled title=\"Primero extrae las descargas\"' : ''}>
+                <button class="btn btn-primary" onclick="generateCommands(${item.id})" ${hasDownloads ? '' : 'disabled title="Primero extrae las descargas"'}>
                     🚀 Generar Comandos
                 </button>
 
@@ -483,6 +487,68 @@ async function openDetail(contentId) {
         `;
     }
 
+    // Episodios y sus descargas (solo para series/animes)
+    if (item.episodes && item.episodes.length > 0) {
+        // Agrupar episodios por temporada
+        const seasons = {};
+        item.episodes.forEach(ep => {
+            const s = ep.season || 1;
+            if (!seasons[s]) seasons[s] = [];
+            seasons[s].push(ep);
+        });
+
+        const totalEpDownloads = item.episodes.reduce((sum, ep) => sum + (ep.downloads ? ep.downloads.length : 0), 0);
+
+        bodyHtml += `<div class="modal-section">
+            <h3>📺 Episodios (${item.episodes.length}) — ${totalEpDownloads} enlaces de descarga</h3>`;
+
+        Object.keys(seasons).sort((a, b) => a - b).forEach(seasonNum => {
+            const eps = seasons[seasonNum].sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0));
+            const seasonDlCount = eps.reduce((sum, ep) => sum + (ep.downloads ? ep.downloads.length : 0), 0);
+
+            bodyHtml += `
+                <details class="season-details" ${Object.keys(seasons).length === 1 ? 'open' : ''}>
+                    <summary class="season-summary">
+                        <strong>Temporada ${seasonNum}</strong>
+                        <span style="color:var(--text-muted);font-size:12px;margin-left:8px">${eps.length} episodios · ${seasonDlCount} descargas</span>
+                    </summary>
+                    <div class="episodes-list">`;
+
+            eps.forEach(ep => {
+                bodyHtml += `
+                    <div class="episode-item">
+                        <div class="episode-header">
+                            <span class="episode-number">E${String(ep.episode_number || '?').padStart(2, '0')}</span>
+                            <span class="episode-title">${escapeHtml(ep.title || 'Sin título')}</span>
+                        </div>`;
+
+                if (ep.downloads && ep.downloads.length > 0) {
+                    bodyHtml += `<div class="episode-downloads">`;
+                    ep.downloads.forEach(dl => {
+                        const serverName = extractServerName(dl.url);
+                        const isMf = (dl.url || '').toLowerCase().includes('mediafire');
+                        bodyHtml += `
+                            <a href="${escapeHtml(dl.url)}" target="_blank" rel="noopener"
+                               class="ep-dl-link ${isMf ? 'ep-dl-mf' : ''}"
+                               title="${escapeHtml(dl.quality || '')} · ${escapeHtml(dl.language || '')}">
+                                ${serverName}
+                                <span class="ep-dl-quality">${escapeHtml(dl.quality || '')}</span>
+                            </a>`;
+                    });
+                    bodyHtml += `</div>`;
+                } else {
+                    bodyHtml += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Sin descargas</div>`;
+                }
+
+                bodyHtml += `</div>`;
+            });
+
+            bodyHtml += `</div></details>`;
+        });
+
+        bodyHtml += `</div>`;
+    }
+
     // Info adicional
     bodyHtml += `
         <div class="modal-section" style="font-size:12px;color:var(--text-muted)">
@@ -497,8 +563,8 @@ async function openDetail(contentId) {
         searchTmdb(item.id, item.title, item.year || '', item.content_type);
     }
 
-    // Auto-generar comandos si ya tiene TMDB ID y descargas
-    if (item.tmdb_id && item.downloads.length > 0) {
+    // Auto-generar comandos si ya tiene TMDB ID y descargas (películas o episodios)
+    if (item.tmdb_id && hasDownloads) {
         generateCommands(item.id);
     }
 }
@@ -685,8 +751,10 @@ async function generateCommands(contentId) {
         html += `
             <div class="cmd-block" ${isMf ? 'style="border-left:3px solid #4ade80"' : ''}>
                 <div class="cmd-label">
+                    ${cmd.season != null ? `<span class="quality-badge" style="background:var(--series-color)">S${String(cmd.season).padStart(2,'0')}E${String(cmd.episode).padStart(2,'0')}</span>` : ''}
                     <span class="quality-badge">${escapeHtml(cmd.quality || 'N/A')}</span>
                     ${escapeHtml(cmd.language || '')} · ${extractServerName(cmd.url)}
+                    ${cmd.episode_title ? `<span style="color:var(--text-muted);font-size:11px;margin-left:4px">${escapeHtml(cmd.episode_title)}</span>` : ''}
                 </div>
                 <pre>${escapeHtml(cmd.command)}</pre>
                 <button class="copy-btn" style="right:50px" onclick="copyToClipboard(this.previousElementSibling.textContent)">📋</button>
