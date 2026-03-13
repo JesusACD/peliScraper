@@ -602,38 +602,40 @@ def bulk_generate_commands():
     })
 
 
-def _build_command(dl, tmdb_id, clean_title, year, password='', upload_servers=None, poster=None, content_type='movies', content_id=None):
+def _build_command(dl, tmdb_id, clean_title, year, password='', upload_servers=None, poster=None, content_type='movies', content_id=None, season=None, episode=None, episode_title=None):
     """Construye un comando CLI a partir de un enlace de descarga."""
-    # Determinar calidad limpia
     quality = dl.quality or ''
     quality_clean = quality.replace('Dual ', '').replace('Full HD', '1080p').replace('HD', '720p')
     if not quality_clean:
         quality_clean = '1080p'
 
-    # Determinar idioma limpio
     lang = dl.language or ''
     lang_parts = [l.strip() for l in lang.split('/')]
     lang_clean = lang_parts[0] if lang_parts else 'Latino'
 
-    # Construir comando base
-    cmd_parts = ['python main.py process']
+    is_series = season is not None and episode is not None
+    cmd_parts = ['python main.py process-series' if is_series else 'python main.py process']
     cmd_parts.append(f'"{dl.url}"')
     cmd_parts.append(f'-i {tmdb_id}')
     cmd_parts.append(f'-t "{clean_title}"')
-    if year:
+
+    if is_series:
+        cmd_parts.append(f'-s {season}')
+        cmd_parts.append(f'-e {episode}')
+    elif year:
         cmd_parts.append(f'-y {year}')
+
     cmd_parts.append(f'-Q {quality_clean}')
     cmd_parts.append(f'-l {lang_clean}')
 
     if password:
         cmd_parts.append(f'-p "{password}"')
 
-    # Agregar servidores de upload (mediafire usa --upload-rar-encoded)
     for server in (upload_servers or []):
         flag = '--upload-rar-encoded' if server.lower() == 'mediafire' else '--upload'
         cmd_parts.append(f'{flag} {server}')
 
-    return {
+    result = {
         'command': ' '.join(cmd_parts) + '; rm -rf downloads/*;',
         'title': clean_title,
         'tmdb_id': tmdb_id,
@@ -646,6 +648,13 @@ def _build_command(dl, tmdb_id, clean_title, year, password='', upload_servers=N
         'content_type': content_type,
         'year': year,
     }
+
+    if is_series:
+        result['season'] = season
+        result['episode'] = episode
+        result['episode_title'] = episode_title
+
+    return result
 
 
 @api.route('/api/content/page-generate-mediafire', methods=['POST'])
@@ -769,31 +778,69 @@ def page_generate_mediafire():
             year = content.release_date[:4]
         clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
 
-        # Obtener solo descargas de MediaFire
-        downloads = DownloadLink.query.filter_by(content_id=content.id).all()
-        mf_downloads = [dl for dl in downloads if dl.url and 'mediafire' in dl.url.lower()]
+        # Obtener descargas según tipo de contenido
+        if content.content_type in ('tvshows', 'animes'):
+            # Series: buscar descargas de MediaFire a nivel de episodio
+            episodes = Episode.query.filter_by(content_id=content.id).order_by(
+                Episode.season, Episode.episode_number
+            ).all()
 
-        if not mf_downloads:
-            # Recopilar servidores disponibles para mostrar al usuario
-            available_servers = list(set(
-                extractServerNamePy(dl.url) for dl in downloads if dl.url
-            ))
-            skipped.append({
-                'title': clean_title,
-                'poster': content.poster,
-                'content_id': content.id,
-                'year': year,
-                'servers': available_servers,
-                'total_downloads': len(downloads),
-            })
-            continue
+            has_mf = False
+            all_ep_downloads = []
+            for ep in episodes:
+                ep_downloads = EpisodeDownload.query.filter_by(episode_id=ep.id).all()
+                for dl in ep_downloads:
+                    all_ep_downloads.append((ep, dl))
+                    if dl.url and 'mediafire' in dl.url.lower():
+                        has_mf = True
 
-        for dl in mf_downloads:
-            all_results.append(
-                _build_command(dl, tmdb_id, clean_title, year, password, upload_servers,
-                               poster=content.poster, content_type=content.content_type,
-                               content_id=content.id)
-            )
+            if not has_mf:
+                available_servers = list(set(
+                    extractServerNamePy(dl.url) for _, dl in all_ep_downloads if dl.url
+                ))
+                skipped.append({
+                    'title': clean_title,
+                    'poster': content.poster,
+                    'content_id': content.id,
+                    'year': year,
+                    'servers': available_servers,
+                    'total_downloads': len(all_ep_downloads),
+                })
+                continue
+
+            for ep, dl in all_ep_downloads:
+                if dl.url and 'mediafire' in dl.url.lower():
+                    all_results.append(
+                        _build_command(dl, tmdb_id, clean_title, year, password, upload_servers,
+                                       poster=content.poster, content_type=content.content_type,
+                                       content_id=content.id, season=ep.season or 1,
+                                       episode=ep.episode_number or 1, episode_title=ep.title)
+                    )
+        else:
+            # Películas: buscar descargas de MediaFire a nivel de contenido
+            downloads = DownloadLink.query.filter_by(content_id=content.id).all()
+            mf_downloads = [dl for dl in downloads if dl.url and 'mediafire' in dl.url.lower()]
+
+            if not mf_downloads:
+                available_servers = list(set(
+                    extractServerNamePy(dl.url) for dl in downloads if dl.url
+                ))
+                skipped.append({
+                    'title': clean_title,
+                    'poster': content.poster,
+                    'content_id': content.id,
+                    'year': year,
+                    'servers': available_servers,
+                    'total_downloads': len(downloads),
+                })
+                continue
+
+            for dl in mf_downloads:
+                all_results.append(
+                    _build_command(dl, tmdb_id, clean_title, year, password, upload_servers,
+                                   poster=content.poster, content_type=content.content_type,
+                                   content_id=content.id)
+                )
 
     return jsonify({
         'error': False,
