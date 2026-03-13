@@ -273,7 +273,28 @@ function renderPagination(contentType, pagination) {
     html += `<button ${!has_next ? 'disabled' : ''} onclick="loadContent('${contentType}', ${page + 1})">Siguiente →</button>`;
     html += `<span class="page-info">${total.toLocaleString()} resultados</span>`;
 
+    // Input para ir a una página específica
+    html += `<span class="page-goto">
+        <input type="number" min="1" max="${pages}" value="${page}"
+               placeholder="Pág" class="goto-input"
+               id="gotoPage${suffix}"
+               onkeydown="if(event.key==='Enter') goToPage('${contentType}', ${pages})">
+        <button class="btn btn-outline btn-sm goto-btn"
+                onclick="goToPage('${contentType}', ${pages})">Ir</button>
+        <span class="goto-total">/ ${pages}</span>
+    </span>`;
+
     container.innerHTML = html;
+}
+
+function goToPage(contentType, maxPages) {
+    // Navega a la página especificada en el input
+    const suffix = TYPE_TO_DOM[contentType];
+    const input = document.getElementById(`gotoPage${suffix}`);
+    let page = parseInt(input.value);
+    if (isNaN(page) || page < 1) page = 1;
+    if (page > maxPages) page = maxPages;
+    loadContent(contentType, page);
 }
 
 // ─── DETALLE / MODAL ────────────────────────────────────
