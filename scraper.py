@@ -214,8 +214,9 @@ class LaMovieScraper:
             return f'{IMAGE_BASE}{path}'
         return f'{IMAGE_BASE}/{path}'
 
-    def _parse_content_item(self, item):
-        """Parsea un item del listado a un diccionario normalizado."""
+    def _parse_content_item(self, item, content_type_override=None):
+        """Parsea un item del listado a un diccionario normalizado.
+        content_type_override: tipo de contenido forzado (la API devuelve 'movies' para todos)."""
         # Resolver taxonomías a nombres legibles
         genres = self._resolve_taxonomies(item.get('genres', []), GENRES_MAP)
         quality = self._resolve_taxonomies(item.get('quality', []), QUALITY_MAP)
@@ -238,7 +239,7 @@ class LaMovieScraper:
             'original_title': item.get('original_title', ''),
             'slug': item.get('slug', ''),
             'overview': item.get('overview', ''),
-            'content_type': item.get('type', 'movies'),
+            'content_type': content_type_override or item.get('type', 'movies'),
             'poster': self._build_image_url(images.get('poster')),
             'backdrop': self._build_image_url(images.get('backdrop')),
             'logo': self._build_image_url(images.get('logo')),
@@ -318,7 +319,7 @@ class LaMovieScraper:
                             break
 
                         try:
-                            parsed = self._parse_content_item(post)
+                            parsed = self._parse_content_item(post, content_type_override=content_type)
 
                             # Verificar si ya existe y actualizar o crear
                             existing = Content.query.filter_by(
