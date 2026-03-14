@@ -914,6 +914,122 @@ function exportData(format, type) {
     showToast(`Exportando ${type} en formato ${format.toUpperCase()}`, 'success');
 }
 
+// ─── EXPORTAR MEDIAFIRE TXT ─────────────────────────────
+function openMediafireExport() {
+    // Abrir el overlay con un panel de configuración para la exportación
+    const overlay = document.getElementById('bulkResultsOverlay');
+    const content = document.getElementById('bulkResultsContent');
+    overlay.classList.add('active');
+
+    let html = `
+        <div style="margin-bottom:20px">
+            <p style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px">📥 Exportar enlaces MediaFire a TXT</p>
+            <p style="font-size:12px;color:var(--text-muted)">Genera un archivo .txt con todos los enlaces de MediaFire de la base de datos.</p>
+        </div>
+
+        <!-- Tipo de contenido -->
+        <div style="margin-bottom:16px;padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">
+            <label style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Tipo de contenido</label>
+            <select id="mfExportType" style="width:100%;padding:8px 12px;background:var(--bg-main);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px">
+                <option value="movies">🎬 Películas</option>
+                <option value="tvshows">📺 Series</option>
+                <option value="animes">🎌 Animes</option>
+                <option value="all">📦 Todo</option>
+            </select>
+        </div>
+
+        <!-- Modo de exportación -->
+        <div style="margin-bottom:16px;padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">
+            <label style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Modo de exportación</label>
+            <div style="display:flex;gap:10px">
+                <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-primary);cursor:pointer;padding:8px 14px;background:var(--bg-main);border:1px solid var(--border-color);border-radius:var(--radius-sm);flex:1">
+                    <input type="radio" name="mfExportMode" value="links" checked style="accent-color:var(--accent)">
+                    🔗 Solo enlaces (URLs)
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-primary);cursor:pointer;padding:8px 14px;background:var(--bg-main);border:1px solid var(--border-color);border-radius:var(--radius-sm);flex:1">
+                    <input type="radio" name="mfExportMode" value="commands" style="accent-color:var(--accent)">
+                    ⚙️ Comandos CLI completos
+                </label>
+            </div>
+        </div>
+
+        <!-- Límite -->
+        <div style="margin-bottom:16px;padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">
+            <label style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Límite de resultados</label>
+            <div style="display:flex;align-items:center;gap:10px">
+                <input type="number" id="mfExportLimit" value="0" min="0" placeholder="0 = sin límite" style="width:140px;padding:8px 12px;background:var(--bg-main);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px">
+                <span style="font-size:12px;color:var(--text-muted)">0 = todos los resultados</span>
+            </div>
+        </div>
+
+        <!-- Configuración de comandos (se muestra solo en modo commands) -->
+        <div id="mfExportCmdConfig" style="display:none">
+            <div style="margin-bottom:16px;padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid var(--border-color)">
+                <div class="field" style="margin-bottom:12px">
+                    <label style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Contraseña (archivo)</label>
+                    <input type="text" id="mfExportPassword" value="cc" placeholder="ej: cc" style="width:160px;padding:8px 12px;background:var(--bg-main);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px">
+                </div>
+                <label style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Servidores de upload</label>
+                <div class="upload-servers-grid" id="mfExportServers">
+                    ${UPLOAD_SERVERS.map(s => `
+                        <span class="upload-server-tag active" data-server="${s}" onclick="toggleUploadServer(this)">${s}</span>
+                    `).join('')}
+                </div>
+                <div style="margin-top:8px;display:flex;gap:8px">
+                    <button class="btn btn-outline btn-sm" onclick="document.querySelectorAll('#mfExportServers .upload-server-tag').forEach(el => el.classList.add('active'))">Seleccionar todos</button>
+                    <button class="btn btn-outline btn-sm" onclick="document.querySelectorAll('#mfExportServers .upload-server-tag').forEach(el => el.classList.remove('active'))">Deseleccionar</button>
+                </div>
+            </div>
+        </div>
+
+        <button class="btn btn-primary" onclick="downloadMediafireTxt()" style="width:100%;padding:12px;font-size:14px">
+            📥 Descargar archivo TXT
+        </button>
+    `;
+
+    content.innerHTML = html;
+
+    // Mostrar/ocultar configuración de comandos según el modo
+    document.querySelectorAll('input[name="mfExportMode"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const cmdConfig = document.getElementById('mfExportCmdConfig');
+            cmdConfig.style.display = radio.value === 'commands' && radio.checked ? 'block' : '';
+            // También actualizar el otro caso
+            if (radio.value === 'links' && radio.checked) {
+                cmdConfig.style.display = 'none';
+            }
+        });
+    });
+}
+
+function downloadMediafireTxt() {
+    // Recopilar configuración del formulario
+    const type = document.getElementById('mfExportType').value;
+    const mode = document.querySelector('input[name="mfExportMode"]:checked').value;
+    const limit = document.getElementById('mfExportLimit').value || '0';
+
+    const params = new URLSearchParams({ type, mode, limit });
+
+    if (mode === 'commands') {
+        const password = document.getElementById('mfExportPassword')?.value || 'cc';
+        params.set('password', password);
+
+        // Obtener servidores seleccionados
+        const servers = [];
+        document.querySelectorAll('#mfExportServers .upload-server-tag.active').forEach(el => {
+            servers.push(el.dataset.server);
+        });
+        if (servers.length > 0) {
+            params.set('upload_servers', servers.join(','));
+        }
+    }
+
+    // Descargar directamente
+    window.open(`/api/export/mediafire-txt?${params}`, '_blank');
+    showToast('Descargando archivo TXT de MediaFire...', 'success');
+}
+
+
 // ─── LIMPIAR BD ─────────────────────────────────────────
 async function clearDatabase() {
     if (!confirm('¿Estás seguro de que deseas eliminar TODOS los datos scrapeados?')) return;

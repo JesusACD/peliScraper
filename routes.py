@@ -31,8 +31,10 @@ def start_scrape():
     start_page = data.get('start_page', 1)
     end_page = data.get('end_page')  # None = todas las páginas
 
-    # Verificar si ya hay un scraping en curso
-    active_job = ScrapeJob.query.filter_by(status='running').first()
+    # Verificar si ya hay un scraping en curso (tanto 'running' como 'pending')
+    active_job = ScrapeJob.query.filter(
+        ScrapeJob.status.in_(['running', 'pending'])
+    ).first()
     if active_job:
         return jsonify({'error': True, 'message': 'Ya hay un scraping en curso', 'job': active_job.to_dict()}), 409
 
@@ -75,7 +77,10 @@ def start_scrape():
 @api.route('/api/scrape/status')
 def scrape_status():
     """Obtiene el estado del scraping activo o el último completado."""
-    active_job = ScrapeJob.query.filter_by(status='running').first()
+    # Buscar trabajos activos: tanto 'running' como 'pending' son estados activos
+    active_job = ScrapeJob.query.filter(
+        ScrapeJob.status.in_(['running', 'pending'])
+    ).first()
     if active_job:
         return jsonify({'error': False, 'active': True, 'job': active_job.to_dict()})
 
@@ -92,6 +97,17 @@ def stop_scrape():
     """Detiene el scraping actual."""
     if scraper:
         scraper.stop()
+
+    # Marcar el trabajo activo como 'stopped' directamente en la BD
+    # para que el polling de la UI lo detecte de inmediato
+    active_job = ScrapeJob.query.filter(
+        ScrapeJob.status.in_(['running', 'pending'])
+    ).first()
+    if active_job:
+        active_job.status = 'stopped'
+        active_job.finished_at = datetime.utcnow()
+        db.session.commit()
+
     return jsonify({'error': False, 'message': 'Señal de parada enviada'})
 
 
@@ -280,6 +296,162 @@ def export_data(export_type):
         )
 
     return jsonify({'error': True, 'message': 'Formato no soportado. Usa json o csv'}), 400
+
+
+@api.route('/api/export/mediafire-txt')
+def export_mediafire_txt():
+    """Exporta enlaces de MediaFire a un archivo TXT descargable.
+    Modos: 'links' (solo URLs) o 'commands' (comandos CLI completos).
+    """
+    import re
+    import requests as req
+    import random
+    import time as _time
+
+    content_type = request.args.get('type', 'movies')  # movies, tvshows, animes, all
+    mode = request.args.get('mode', 'links')  # links o commands
+    limit = int(request.args.get('limit', 0))  # 0 = sin límite
+    password = request.args.get('password', 'cc')
+    upload_servers_str = request.args.get('upload_servers', '')
+    upload_servers = [s.strip() for s in upload_servers_str.split(',') if s.strip()] if upload_servers_str else []
+
+    lines = []
+
+    if mode == 'links':
+        # ── Modo links: solo las URLs de MediaFire ──
+
+        # Enlaces de películas (DownloadLink)
+        if content_type in ('movies', 'all'):
+            query = db.session.query(DownloadLink.url, Content.title, Content.year).join(
+                Content, DownloadLink.content_id == Content.id
+            ).filter(
+                DownloadLink.url.ilike('%mediafire%'),
+                Content.content_type == 'movies'
+            )
+            if content_type != 'all':
+                pass  # Ya filtrado arriba
+            for url, title, year in query.all():
+                lines.append(url)
+
+        # Enlaces de series/animes (EpisodeDownload)
+        if content_type in ('tvshows', 'animes', 'all'):
+            ep_query = db.session.query(EpisodeDownload.url).join(
+                Episode, EpisodeDownload.episode_id == Episode.id
+            ).join(
+                Content, Episode.content_id == Content.id
+            ).filter(
+                EpisodeDownload.url.ilike('%mediafire%')
+            )
+            if content_type != 'all':
+                ep_query = ep_query.filter(Content.content_type == content_type)
+
+            for (url,) in ep_query.all():
+                lines.append(url)
+
+        # Aplicar límite
+        if limit > 0:
+            lines = lines[:limit]
+
+    elif mode == 'commands':
+        # ── Modo commands: comandos CLI completos ──
+        from scraper import TMDB_API_KEYS
+
+        # Obtener contenidos con descargas de MediaFire
+        if content_type == 'all':
+            contents = Content.query.filter_by(downloads_scraped=True).all()
+        else:
+            contents = Content.query.filter_by(
+                content_type=content_type, downloads_scraped=True
+            ).all()
+
+        for content in contents:
+            if limit > 0 and len(lines) >= limit:
+                break
+
+            tmdb_id = content.tmdb_id
+
+            # Auto-resolver TMDB ID si no tiene
+            if not tmdb_id:
+                clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
+                search_type = 'movie' if content.content_type in ('movies',) else 'tv'
+                year = content.year or ''
+                api_key = random.choice(TMDB_API_KEYS)
+                params = {
+                    'api_key': api_key,
+                    'query': clean_title,
+                    'language': 'es-MX',
+                }
+                if year:
+                    params['year' if search_type == 'movie' else 'first_air_date_year'] = year
+                try:
+                    resp = req.get(
+                        f'https://api.themoviedb.org/3/search/{search_type}',
+                        params=params, timeout=10
+                    )
+                    if resp.status_code == 200:
+                        results = resp.json().get('results', [])
+                        if results:
+                            tmdb_id = results[0]['id']
+                            content.tmdb_id = tmdb_id
+                            db.session.commit()
+                    _time.sleep(0.3)
+                except Exception:
+                    pass
+
+            if not tmdb_id:
+                continue
+
+            # Preparar datos del contenido
+            year = content.year or ''
+            if not year and content.release_date:
+                year = content.release_date[:4]
+            clean_title = re.sub(r'\s*\(\d{4}\)\s*$', '', content.title).strip()
+
+            if content.content_type in ('tvshows', 'animes'):
+                # Series: buscar descargas de episodios con MediaFire
+                episodes = Episode.query.filter_by(content_id=content.id).order_by(
+                    Episode.season, Episode.episode_number
+                ).all()
+                for ep in episodes:
+                    if limit > 0 and len(lines) >= limit:
+                        break
+                    ep_downloads = EpisodeDownload.query.filter_by(episode_id=ep.id).all()
+                    for dl in ep_downloads:
+                        if limit > 0 and len(lines) >= limit:
+                            break
+                        if dl.url and 'mediafire' in dl.url.lower():
+                            cmd = _build_command(
+                                dl, tmdb_id, clean_title, year, password, upload_servers,
+                                content_type=content.content_type, content_id=content.id,
+                                season=ep.season or 1, episode=ep.episode_number or 1,
+                                episode_title=ep.title
+                            )
+                            lines.append(cmd['command'])
+            else:
+                # Películas: descargas directas
+                downloads = DownloadLink.query.filter_by(content_id=content.id).all()
+                for dl in downloads:
+                    if limit > 0 and len(lines) >= limit:
+                        break
+                    if dl.url and 'mediafire' in dl.url.lower():
+                        cmd = _build_command(
+                            dl, tmdb_id, clean_title, year, password, upload_servers,
+                            content_type=content.content_type, content_id=content.id
+                        )
+                        lines.append(cmd['command'])
+    else:
+        return jsonify({'error': True, 'message': 'Modo no válido. Usa links o commands'}), 400
+
+    # Generar archivo TXT
+    txt_content = '\n'.join(lines)
+    type_label = content_type if content_type != 'all' else 'all'
+    filename = f'mediafire_{type_label}_{mode}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
+
+    return Response(
+        txt_content,
+        mimetype='text/plain',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
 
 
 # ─── TMDB & GENERADOR DE COMANDOS ────────────────────────────
